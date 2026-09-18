@@ -1,96 +1,206 @@
-name: edit
-description: "A new Flutter project."
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:image/image.dart' as img; // Used to safely decode pixels locally
 
-# The following defines the version and build number for your application.
-# A version number is three numbers separated by dots, like 1.2.43
-# followed by an optional build number separated by a +.
-# Both the version and the builder number may be overridden in flutter
-# build by specifying --build-name and --build-number, respectively.
-# In Android, build-name is used as versionName while build-number used as versionCode.
-# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
-# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
-# Read more about iOS versioning at
-# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-# In Windows, build-name is used as the major, minor, and patch parts
-# of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+void main() => runApp(const MaterialApp(home: CanvaGrabApp()));
 
-environment:
-  sdk: ^3.13.3
+class CanvaGrabApp extends StatefulWidget {
+  const CanvaGrabApp({super.key});
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
-dependencies:
-  flutter:
-    sdk: flutter
-  image_picker: ^1.1.2
-  universal_html: ^2.2.4
+  @override
+  State<CanvaGrabApp> createState() => _CanvaGrabAppState();
+}
 
+class _CanvaGrabAppState extends State<CanvaGrabApp> {
+  File? _imageFile;
+  final ImagePicker _picker = ImagePicker();
+  final TextRecognizer _textRecognizer = TextRecognizer();
+  List<ExtractedTextData> _extractedTexts = [];
+  bool _isLoading = false;
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
-  image: ^4.10.1
-  google_mlkit_text_recognition: ^0.17.1
-  flutter_svg: ^2.3.0
-  file_picker: ^13.0.0
+  // Global key to find the exact rendered size of the image on the screen
+  final GlobalKey _imageKey = GlobalKey();
 
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
+  // 1. Pick Image from Gallery
+  Future<void> _pickImage() async {
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() {
+        _imageFile = File(pickedFile.path);
+        _extractedTexts = [];
+        _isLoading = true;
+      });
+      _processImage(pickedFile.path);
+    }
+  }
 
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
-  flutter_lints: ^6.0.0
+  // 2. OCR Scan & Background Pixel Color Sampling
+  Future<void> _processImage(String path) async {
+    final inputImage = InputImage.fromFilePath(path);
+    final RecognizedText recognizedText = await _textRecognizer.processImage(inputImage);
 
-# For information on the generic Dart part of this file, see the
-# following page: https://dart.dev/tools/pub/pubspec
+    // Read and decode image bytes entirely offline to read pixels
+    final Uint8List bytes = await File(path).readAsBytes();
+    final img.Image? decodedImage = img.decodeImage(bytes);
 
-# The following section is specific to Flutter packages.
-flutter:
+    List<ExtractedTextData> tempTexts = [];
 
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
-  uses-material-design: true
+    if (decodedImage != null) {
+      for (TextBlock block in recognizedText.blocks) {
+        for (TextLine line in block.lines) {
+          final rect = line.boundingBox;
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+          // Sample background color by picking a pixel right above the text block boundary
+          int sampleX = rect.left.toInt().clamp(0, decodedImage.width - 1);
+          int sampleY = (rect.top.toInt() - 4).clamp(0, decodedImage.height - 1);
 
-  # An image asset can refer to one or more resolution-specific "variants", see
-  # https://flutter.dev/to/resolution-aware-images
+          // Retrieve the color data structure from the pixel coordinates
+          final img.Pixel pixel = decodedImage.getPixel(sampleX, sampleY);
+          
+          // Convert the pixel color values directly into a Flutter Color
+          final Color sampledColor = Color.fromARGB(
+            pixel.a.toInt(),
+            pixel.r.toInt(),
+            pixel.g.toInt(),
+            pixel.b.toInt(),
+          );
 
-  # For details regarding adding assets from package dependencies, see
-  # https://flutter.dev/to/asset-from-package
+          tempTexts.add(ExtractedTextData(
+            controller: TextEditingController(text: line.text),
+            boundingBox: rect,
+            backgroundColor: sampledColor,
+          ));
+        }
+      }
+    }
 
-  # To add custom fonts to your application, add a fonts section here,
-  # in this "flutter" section. Each entry in this list should have a
-  # "family" key with the font family name, and a "fonts" key with a
-  # list giving the asset and other descriptors for the font. For
-  # example:
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-  #   - family: Trajan Pro
-  #     fonts:
-  #       - asset: fonts/TrajanPro.ttf
-  #       - asset: fonts/TrajanPro_Bold.ttf
-  #         weight: 700
-  #
-  # For details regarding fonts from package dependencies,
-  # see https://flutter.dev/to/font-from-package
+    setState(() {
+      _extractedTexts = tempTexts;
+      _isLoading = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    _textRecognizer.close();
+    for (var item in _extractedTexts) {
+      item.controller.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Canva Grab Tool (Non-AI)')),
+      body: Center(
+        child: _isLoading
+            ? const CircularProgressIndicator()
+            : _imageFile == null
+                ? const Text('Upload an image containing text to start.')
+                : LayoutBuilder(
+                    builder: (context, constraints) {
+                      return Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          // Base Display Image
+                          Image.file(
+                            _imageFile!,
+                            key: _imageKey,
+                            fit: BoxFit.contain,
+                          ),
+
+                          // Dynamic coordinate scaling system
+                          ..._extractedTexts.map((textData) {
+                            return FutureBuilder<Rect>(
+                              future: _scaleRectToScreen(textData.boundingBox),
+                              builder: (context, snapshot) {
+                                if (!snapshot.hasData) return const SizedBox.shrink();
+                                final screenRect = snapshot.data!;
+
+                                return Positioned(
+                                  left: screenRect.left,
+                                  top: screenRect.top,
+                                  width: screenRect.width,
+                                  height: screenRect.height,
+                                  child: Stack(
+                                    children: [
+                                      // Mask Layer: Uses the exact sampled color to hide old text
+                                      Container(
+                                        color: textData.backgroundColor,
+                                      ),
+                                      // Editable User Text Entry Layer
+                                      TextFormField(
+                                        controller: textData.controller,
+                                        style: TextStyle(
+                                          // Simple invert logic to keep text visible on any background
+                                          color: textData.backgroundColor.computeLuminance() > 0.5
+                                              ? Colors.black
+                                              : Colors.white,
+                                          fontSize: screenRect.height * 0.7,
+                                        ),
+                                        decoration: const InputDecoration(
+                                          border: InputBorder.none,
+                                          contentPadding: EdgeInsets.zero,
+                                          isDense: true,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            );
+                          }),
+                        ],
+                      );
+                    },
+                  ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _pickImage,
+        child: const Icon(Icons.add_a_photo),
+      ),
+    );
+  }
+
+  // Helper calculation to map original image coordinates to current app dimensions
+  Future<Rect> _scaleRectToScreen(Rect originalRect) async {
+    if (_imageKey.currentContext == null) return Rect.zero;
+
+    final RenderBox renderBox = _imageKey.currentContext!.findRenderObject() as RenderBox;
+    final Size displayedSize = renderBox.size;
+
+    // Get original source metadata dimensions
+    final File imageFile = _imageFile!;
+    final Uint8List bytes = await imageFile.readAsBytes();
+    final img.Image? originalImage = img.decodeImage(bytes);
+
+    if (originalImage == null) return Rect.zero;
+
+    double scaleX = displayedSize.width / originalImage.width;
+    double scaleY = displayedSize.height / originalImage.height;
+
+    return Rect.fromLTWH(
+      originalRect.left * scaleX,
+      originalRect.top * scaleY,
+      originalRect.width * scaleX,
+      originalRect.height * scaleY,
+    );
+  }
+}
+
+// Blueprint keeping track of positions, text inputs, and matching background colors
+class ExtractedTextData {
+  final TextEditingController controller;
+  final Rect boundingBox;
+  final Color backgroundColor;
+
+  ExtractedTextData({
+    required this.controller,
+    required this.boundingBox,
+    required this.backgroundColor,
+  });
+}
