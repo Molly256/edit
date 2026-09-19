@@ -9,7 +9,7 @@ app.use(cors());
 const upload = multer();
 
 const HF_TOKEN = process.env.HF_TOKEN;
-const MODEL_URL = "https://router.huggingface.co/hf-inference/models/runwayml/stable-diffusion-inpainting";
+const MODEL_URL = process.env.HF_API_URL || "https://api-inference.huggingface.co/models/stable-diffusion-v1-5/stable-diffusion-inpainting";
 
 // --- WEBSITE UI ---
 app.get('/', (req, res) => {
