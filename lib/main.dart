@@ -28,9 +28,9 @@ class _CanvaGrabAppState extends State<CanvaGrabApp> {
   
   String? _foundReplacement;
   Rect? _replacementRect;
-  Color _replacementBg = Colors.black;
 
-  static const String _apiUrl = String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:10000/inpaint');
+  // FIXED - Direct URL, no fromEnvironment
+  static const String _apiUrl = 'https://edit-veda.onrender.com/inpaint';
 
   Future<void> _pickImage() async {
     final XFile? file = await _picker.pickImage(source: ImageSource.gallery);
@@ -41,22 +41,27 @@ class _CanvaGrabAppState extends State<CanvaGrabApp> {
         _allBlocks = [];
         _foundReplacement = null;
         _replacementRect = null;
-        _status = "Image uploaded";
+        _status = "Scanning text...";
       });
       final result = await _textRecognizer.processImage(InputImage.fromFilePath(file.path));
-      setState(() { _allBlocks = result.blocks; });
+      setState(() { 
+        _allBlocks = result.blocks;
+        _status = "Found ${result.blocks.length} text blocks - ready";
+      });
     }
   }
 
   Future<void> _findAndReplace() async {
     String findText = _findController.text.trim();
     String replaceText = _replaceController.text.trim();
-    if (_imageFile == null || findText.isEmpty || replaceText.isEmpty) return;
+    if (_imageFile == null || findText.isEmpty) {
+      setState(() { _status = "Upload image and enter text to find"; });
+      return;
+    }
 
     setState(() { _loading = true; _status = "Finding '$findText'..."; });
 
     Rect? targetRect;
-    Color bgColor = Colors.white;
     final bytes = await _imageFile!.readAsBytes();
     final decoded = img.decodeImage(bytes);
 
@@ -69,36 +74,59 @@ class _CanvaGrabAppState extends State<CanvaGrabApp> {
       }
       if (targetRect != null) break;
     }
-    if (targetRect == null) { setState(() { _loading = false; _status = "Not found"; }); return; }
+    
+    if (targetRect == null) { 
+      setState(() { _loading = false; _status = "Text '$findText' not found"; }); 
+      return; 
+    }
+    if (decoded == null) {
+      setState(() { _loading = false; _status = "Image decode failed"; });
+      return;
+    }
 
-    final mask = img.Image(width: decoded!.width, height: decoded.height);
+    // Create mask
+    final mask = img.Image(width: decoded.width, height: decoded.height);
     img.fill(mask, color: img.ColorRgb8(0, 0, 0));
-    img.fillRect(mask, x1: targetRect.left.toInt(), y1: targetRect.top.toInt(), x2: targetRect.right.toInt(), y2: targetRect.bottom.toInt(), color: img.ColorRgb8(255, 255, 255));
+    img.fillRect(mask, 
+      x1: targetRect.left.toInt().clamp(0, decoded.width), 
+      y1: targetRect.top.toInt().clamp(0, decoded.height), 
+      x2: targetRect.right.toInt().clamp(0, decoded.width), 
+      y2: targetRect.bottom.toInt().clamp(0, decoded.height), 
+      color: img.ColorRgb8(255, 255, 255));
+    
     final maskBytes = Uint8List.fromList(img.encodePng(mask));
     
+    setState(() { _status = "Calling API..."; });
     final cleaned = await _callMyAPI(bytes, maskBytes);
     
     setState(() {
       _cleanedImage = cleaned;
       _foundReplacement = replaceText;
       _replacementRect = targetRect;
-      _replacementBg = bgColor;
       _loading = false;
-      _status = cleaned != null ? "Done!" : "API failed";
+      _status = cleaned != null ? "Done! Inpainted successfully" : "API failed - check logs";
     });
   }
 
   Future<Uint8List?> _callMyAPI(Uint8List imgB, Uint8List maskB) async {
     try {
+      print("Calling: $_apiUrl");
       var req = http.MultipartRequest('POST', Uri.parse(_apiUrl));
-      req.fields['prompt'] = 'clean seamless background, no text';
+      req.fields['prompt'] = 'clean seamless background, no text, plain';
       req.files.add(http.MultipartFile.fromBytes('image', imgB, filename: 'image.png'));
       req.files.add(http.MultipartFile.fromBytes('mask', maskB, filename: 'mask.png'));
-      var streamed = await req.send();
+      
+      var streamed = await req.send().timeout(Duration(seconds: 60));
       var res = await http.Response.fromStream(streamed);
+      
+      print("API Status: ${res.statusCode}");
       if (res.statusCode == 200) return res.bodyBytes;
+      print("API Error Body: ${res.body}");
       return null;
-    } catch (_) { return null; }
+    } catch (e) { 
+      print("API Exception: $e");
+      return null; 
+    }
   }
 
   @override
@@ -106,13 +134,13 @@ class _CanvaGrabAppState extends State<CanvaGrabApp> {
     return Scaffold(
       appBar: AppBar(title: Text(_status)),
       body: Column(children: [
-        Expanded(child: Center(child: _loading ? CircularProgressIndicator() : _imageFile == null ? Text("Upload image") : _cleanedImage != null ? Image.memory(_cleanedImage!) : Image.file(_imageFile!))),
+        Expanded(child: Center(child: _loading ? Column(mainAxisAlignment: MainAxisAlignment.center, children: [CircularProgressIndicator(), SizedBox(height:10), Text(_status)]) : _imageFile == null ? Text("Upload image") : _cleanedImage != null ? Image.memory(_cleanedImage!) : Image.file(_imageFile!))),
         Padding(padding: EdgeInsets.all(12), child: Column(children: [
           TextField(controller: _findController, decoration: InputDecoration(labelText: "Text to find", border: OutlineInputBorder())),
           SizedBox(height: 8),
-          TextField(controller: _replaceController, decoration: InputDecoration(labelText: "Replace with", border: OutlineInputBorder())),
+          TextField(controller: _replaceController, decoration: InputDecoration(labelText: "Replace with (optional)", border: OutlineInputBorder())),
           SizedBox(height: 8),
-          ElevatedButton(onPressed: _findAndReplace, child: Text("REMOVE & REPLACE"))
+          ElevatedButton(onPressed: _loading ? null : _findAndReplace, child: Text("REMOVE & REPLACE"))
         ]))
       ]),
       floatingActionButton: FloatingActionButton(onPressed: _pickImage, child: Icon(Icons.add_a_photo)),
