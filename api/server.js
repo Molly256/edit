@@ -131,7 +131,7 @@ app.post('/inpaint', upload.fields([{name: 'image'}, {name: 'mask'}]), async (re
   try {
     const form = new FormData();
     form.append('image', req.files['image'][0].buffer, {filename: 'image.png'});
-    form.append('mask', req.files['mask'][0].buffer, {filename: 'mask.png'});
+    form.append('mask_image', req.files['mask'][0].buffer, {filename: 'mask.png'}); // FIXED: mask -> mask_image
     form.append('prompt', req.body.prompt || 'clean background, no text');
 
     const response = await axios.post(
