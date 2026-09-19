@@ -9,9 +9,9 @@ app.use(cors());
 const upload = multer();
 
 const HF_TOKEN = process.env.HF_TOKEN;
-const MODEL = "stabilityai/stable-diffusion-2-inpainting";
+const MODEL_URL = "https://router.huggingface.co/hf-inference/models/runwayml/stable-diffusion-inpainting";
 
-// --- NEW WEBSITE UI ---
+// --- WEBSITE UI ---
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -44,13 +44,11 @@ img{max-width:100%; border-radius:10px; margin-top:15px}
 <div id="status"></div>
 <div id="result"></div>
 </div>
-
 <script>
 let canvas=document.getElementById('c');
 let ctx=canvas.getContext('2d');
 let img=new Image();
 let painting=false;
-
 document.getElementById('imgInput').onchange=(e)=>{
   let file=e.target.files[0];
   img.onload=()=>{
@@ -60,14 +58,12 @@ document.getElementById('imgInput').onchange=(e)=>{
   }
   img.src=URL.createObjectURL(file);
 }
-
 canvas.addEventListener('mousedown',()=>painting=true);
 canvas.addEventListener('mouseup',()=>painting=false);
 canvas.addEventListener('mousemove',paint);
 canvas.addEventListener('touchstart',(e)=>{painting=true; paint(e.touches[0]); e.preventDefault()});
 canvas.addEventListener('touchend',()=>painting=false);
 canvas.addEventListener('touchmove',(e)=>{paint(e.touches[0]); e.preventDefault()});
-
 function paint(e){
   if(!painting) return;
   let rect=canvas.getBoundingClientRect();
@@ -80,32 +76,24 @@ function paint(e){
   ctx.arc(x,y,20,0,Math.PI*2);
   ctx.fill();
 }
-
 function clearMask(){
   if(img.src) ctx.drawImage(img,0,0);
 }
-
 async function sendAI(){
   if(!img.src){alert('Upload image first'); return}
   document.getElementById('status').innerText='⏳ AI working... 30-60 sec, dont close';
   document.getElementById('sendBtn').disabled=true;
-
-  // Create image blob
   let origCanvas=document.createElement('canvas');
   origCanvas.width=img.width; origCanvas.height=img.height;
   origCanvas.getContext('2d').drawImage(img,0,0);
   let imageBlob=await new Promise(r=>origCanvas.toBlob(r,'image/png'));
-
-  // Create mask blob (white painted area = mask)
   let maskCanvas=document.createElement('canvas');
   maskCanvas.width=img.width; maskCanvas.height=img.height;
   let mctx=maskCanvas.getContext('2d');
   mctx.fillStyle='black';
   mctx.fillRect(0,0,maskCanvas.width,maskCanvas.height);
-  // white where user painted
   mctx.globalCompositeOperation='lighten';
   mctx.drawImage(canvas,0,0);
-  // extract only painted as white, rest black
   let imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
   let origData=origCanvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
   let maskData=mctx.getImageData(0,0,canvas.width,canvas.height);
@@ -117,12 +105,10 @@ async function sendAI(){
   }
   mctx.putImageData(maskData,0,0);
   let maskBlob=await new Promise(r=>maskCanvas.toBlob(r,'image/png'));
-
   let fd=new FormData();
   fd.append('image',imageBlob,'image.png');
   fd.append('mask',maskBlob,'mask.png');
   fd.append('prompt',document.getElementById('prompt').value);
-
   try{
     let res=await fetch('/inpaint',{method:'POST',body:fd});
     if(!res.ok) throw new Error(await res.text());
@@ -141,7 +127,6 @@ async function sendAI(){
   `);
 });
 
-// Your old API for Flutter app - keep same
 app.post('/inpaint', upload.fields([{name: 'image'}, {name: 'mask'}]), async (req, res) => {
   try {
     const form = new FormData();
@@ -150,18 +135,19 @@ app.post('/inpaint', upload.fields([{name: 'image'}, {name: 'mask'}]), async (re
     form.append('prompt', req.body.prompt || 'clean background, no text');
 
     const response = await axios.post(
-      `https://api-inference.huggingface.co/models/${MODEL}`,
+      MODEL_URL,
       form,
       {
         headers: {...form.getHeaders(), 'Authorization': `Bearer ${HF_TOKEN}` },
-        responseType: 'arraybuffer'
+        responseType: 'arraybuffer',
+        timeout: 120000
       }
     );
     res.set('Content-Type', 'image/png');
     res.send(response.data);
   } catch (err) {
     console.error(err.response?.data?.toString() || err.message);
-    res.status(500).send("HF failed - try again: "+ err.message);
+    res.status(500).send("HF failed - " + (err.response?.data?.toString() || err.message));
   }
 });
 
