@@ -1,101 +1,97 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:image/image.dart' as img; // Used to safely decode pixels locally
+import 'package:image/image.dart' as img;
+import 'package:http/http.dart' as http;
 
-void main() => runApp(const MaterialApp(home: CanvaGrabApp()));
+void main() => runApp(const MaterialApp(home: CanvaGrabApp(), debugShowCheckedModeBanner: false));
 
 class CanvaGrabApp extends StatefulWidget {
   const CanvaGrabApp({super.key});
-
   @override
   State<CanvaGrabApp> createState() => _CanvaGrabAppState();
 }
 
 class _CanvaGrabAppState extends State<CanvaGrabApp> {
   File? _imageFile;
+  Uint8List? _aiBytes;
   final ImagePicker _picker = ImagePicker();
   final TextRecognizer _textRecognizer = TextRecognizer();
   List<ExtractedTextData> _extractedTexts = [];
   bool _isLoading = false;
-
-  // Global key to find the exact rendered size of the image on the screen
   final GlobalKey _imageKey = GlobalKey();
 
-  // 1. Pick Image from Gallery
+  static const String _token = "hf_EjKuqLsyayYSZLiT6gPmjSsbfttSiPzxsU";
+  static const String _model = "stabilityai/stable-diffusion-2-inpainting";
+
   Future<void> _pickImage() async {
-    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
-    if (pickedFile != null) {
-      setState(() {
-        _imageFile = File(pickedFile.path);
-        _extractedTexts = [];
-        _isLoading = true;
-      });
-      _processImage(pickedFile.path);
+    final XFile? file = await _picker.pickImage(source: ImageSource.gallery);
+    if (file != null) {
+      setState(() { _imageFile = File(file.path); _aiBytes = null; _extractedTexts = []; _isLoading = true; });
+      _processImage(file.path);
     }
   }
 
-  // 2. OCR Scan & Background Pixel Color Sampling
   Future<void> _processImage(String path) async {
-    final inputImage = InputImage.fromFilePath(path);
-    final RecognizedText recognizedText = await _textRecognizer.processImage(inputImage);
-
-    // Read and decode image bytes entirely offline to read pixels
-    final Uint8List bytes = await File(path).readAsBytes();
-    final img.Image? decodedImage = img.decodeImage(bytes);
-
+    final recognizedText = await _textRecognizer.processImage(InputImage.fromFilePath(path));
+    final Uint8List imgBytes = await File(path).readAsBytes();
+    final img.Image? decodedImage = img.decodeImage(imgBytes);
     List<ExtractedTextData> tempTexts = [];
 
     if (decodedImage != null) {
+      final img.Image maskImage = img.Image(width: decodedImage.width, height: decodedImage.height);
+      img.fill(maskImage, color: img.ColorRgb8(0, 0, 0));
+
       for (TextBlock block in recognizedText.blocks) {
         for (TextLine line in block.lines) {
           final rect = line.boundingBox;
+          img.fillRect(maskImage, x1: rect.left.toInt(), y1: rect.top.toInt(), x2: rect.right.toInt(), y2: rect.bottom.toInt(), color: img.ColorRgb8(255, 255, 255));
 
-          // Sample background color by picking a pixel right above the text block boundary
-          int sampleX = rect.left.toInt().clamp(0, decodedImage.width - 1);
-          int sampleY = (rect.top.toInt() - 4).clamp(0, decodedImage.height - 1);
-
-          // Retrieve the color data structure from the pixel coordinates
-          final img.Pixel pixel = decodedImage.getPixel(sampleX, sampleY);
-          
-          // Convert the pixel color values directly into a Flutter Color
-          final Color sampledColor = Color.fromARGB(
-            pixel.a.toInt(),
-            pixel.r.toInt(),
-            pixel.g.toInt(),
-            pixel.b.toInt(),
-          );
+          int sx = rect.left.toInt().clamp(0, decodedImage.width - 1);
+          int sy = (rect.top.toInt() - 4).clamp(0, decodedImage.height - 1);
+          final img.Pixel pixel = decodedImage.getPixel(sx, sy);
 
           tempTexts.add(ExtractedTextData(
             controller: TextEditingController(text: line.text),
             boundingBox: rect,
-            backgroundColor: sampledColor,
+            backgroundColor: Color.fromARGB(pixel.a.toInt(), pixel.r.toInt(), pixel.g.toInt(), pixel.b.toInt()),
           ));
         }
       }
+      if (tempTexts.isNotEmpty) {
+        final Uint8List maskBytes = Uint8List.fromList(img.encodePng(maskImage));
+        _aiBytes = await _callInpaintAPI(imgBytes, maskBytes);
+      }
     }
+    setState(() { _extractedTexts = tempTexts; _isLoading = false; });
+  }
 
-    setState(() {
-      _extractedTexts = tempTexts;
-      _isLoading = false;
-    });
+  Future<Uint8List?> _callInpaintAPI(Uint8List imgB, Uint8List maskB) async {
+    try {
+      // 🛠️ FIXED: Changed from generic domain to the exact serverless model URL endpoint
+      final response = await http.post(
+        Uri.parse('https://huggingface.co'),
+        headers: {'Authorization': 'Bearer $_token', 'Content-Type': 'application/json'},
+        body: jsonEncode({'inputs': {'image': base64Encode(imgB), 'mask': base64Encode(maskB), 'prompt': 'clean seamless empty background'}}),
+      );
+      return response.statusCode == 200 ? response.bodyBytes : null;
+    } catch (_) { return null; }
   }
 
   @override
   void dispose() {
     _textRecognizer.close();
-    for (var item in _extractedTexts) {
-      item.controller.dispose();
-    }
+    for (var item in _extractedTexts) { item.controller.dispose(); }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Canva Grab Tool (Non-AI)')),
+      appBar: AppBar(title: const Text('Canva Grab Tool (AI Enabled)')),
       body: Center(
         child: _isLoading
             ? const CircularProgressIndicator()
@@ -106,47 +102,27 @@ class _CanvaGrabAppState extends State<CanvaGrabApp> {
                       return Stack(
                         alignment: Alignment.center,
                         children: [
-                          // Base Display Image
-                          Image.file(
-                            _imageFile!,
-                            key: _imageKey,
-                            fit: BoxFit.contain,
-                          ),
-
-                          // Dynamic coordinate scaling system
+                          _aiBytes != null
+                              ? Image.memory(_aiBytes!, key: _imageKey, fit: BoxFit.contain)
+                              : Image.file(_imageFile!, key: _imageKey, fit: BoxFit.contain),
                           ..._extractedTexts.map((textData) {
                             return FutureBuilder<Rect>(
                               future: _scaleRectToScreen(textData.boundingBox),
                               builder: (context, snapshot) {
                                 if (!snapshot.hasData) return const SizedBox.shrink();
                                 final screenRect = snapshot.data!;
-
                                 return Positioned(
-                                  left: screenRect.left,
-                                  top: screenRect.top,
-                                  width: screenRect.width,
-                                  height: screenRect.height,
+                                  left: screenRect.left, top: screenRect.top, width: screenRect.width, height: screenRect.height,
                                   child: Stack(
                                     children: [
-                                      // Mask Layer: Uses the exact sampled color to hide old text
-                                      Container(
-                                        color: textData.backgroundColor,
-                                      ),
-                                      // Editable User Text Entry Layer
+                                      if (_aiBytes == null) Container(color: textData.backgroundColor),
                                       TextFormField(
                                         controller: textData.controller,
                                         style: TextStyle(
-                                          // Simple invert logic to keep text visible on any background
-                                          color: textData.backgroundColor.computeLuminance() > 0.5
-                                              ? Colors.black
-                                              : Colors.white,
+                                          color: textData.backgroundColor.computeLuminance() > 0.5 ? Colors.black : Colors.white,
                                           fontSize: screenRect.height * 0.7,
                                         ),
-                                        decoration: const InputDecoration(
-                                          border: InputBorder.none,
-                                          contentPadding: EdgeInsets.zero,
-                                          isDense: true,
-                                        ),
+                                        decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.zero, isDense: true),
                                       ),
                                     ],
                                   ),
@@ -159,48 +135,27 @@ class _CanvaGrabAppState extends State<CanvaGrabApp> {
                     },
                   ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _pickImage,
-        child: const Icon(Icons.add_a_photo),
-      ),
+      floatingActionButton: FloatingActionButton(onPressed: _pickImage, child: const Icon(Icons.add_a_photo)),
     );
   }
 
-  // Helper calculation to map original image coordinates to current app dimensions
   Future<Rect> _scaleRectToScreen(Rect originalRect) async {
     if (_imageKey.currentContext == null) return Rect.zero;
-
     final RenderBox renderBox = _imageKey.currentContext!.findRenderObject() as RenderBox;
     final Size displayedSize = renderBox.size;
-
-    // Get original source metadata dimensions
-    final File imageFile = _imageFile!;
-    final Uint8List bytes = await imageFile.readAsBytes();
+    final Uint8List bytes = await _imageFile!.readAsBytes();
     final img.Image? originalImage = img.decodeImage(bytes);
-
     if (originalImage == null) return Rect.zero;
 
     double scaleX = displayedSize.width / originalImage.width;
     double scaleY = displayedSize.height / originalImage.height;
-
-    return Rect.fromLTWH(
-      originalRect.left * scaleX,
-      originalRect.top * scaleY,
-      originalRect.width * scaleX,
-      originalRect.height * scaleY,
-    );
+    return Rect.fromLTWH(originalRect.left * scaleX, originalRect.top * scaleY, originalRect.width * scaleX, originalRect.height * scaleY);
   }
 }
 
-// Blueprint keeping track of positions, text inputs, and matching background colors
 class ExtractedTextData {
   final TextEditingController controller;
   final Rect boundingBox;
   final Color backgroundColor;
-
-  ExtractedTextData({
-    required this.controller,
-    required this.boundingBox,
-    required this.backgroundColor,
-  });
+  ExtractedTextData({required this.controller, required this.boundingBox, required this.backgroundColor});
 }

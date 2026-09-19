@@ -1,102 +1,121 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:image/image.dart' as img;
+import 'package:http/http.dart' as http;
 
-void main() => runApp(const MaterialApp(home: LiveCloneStudioPage(), debugShowCheckedModeBanner: false));
+void main() => runApp(const MaterialApp(home: CanvaGrabApp(), debugShowCheckedModeBanner: false));
 
-class LiveCloneStudioPage extends StatefulWidget {
-  const LiveCloneStudioPage({super.key});
+class CanvaGrabApp extends StatefulWidget {
+  const CanvaGrabApp({super.key});
   @override
-  State<LiveCloneStudioPage> createState() => _LiveCloneStudioPageState();
+  State<CanvaGrabApp> createState() => _CanvaGrabAppState();
 }
 
-class _LiveCloneStudioPageState extends State<LiveCloneStudioPage> {
-  final _time = TextEditingController(text: "12:29");
-  final _battery = TextEditingController(text: "85");
-  final _title = TextEditingController(text: "Congratulations!");
-  final _subTitle = TextEditingController(text: "Funding Award Received");
-  final _amount = TextEditingController(text: "53.00");
-  final _currency = TextEditingController(text: "USD");
-  double _batLvl = 0.85;
+class _CanvaGrabAppState extends State<CanvaGrabApp> {
+  File? _imageFile;
+  Uint8List? _cleanedImage;
+  final ImagePicker _picker = ImagePicker();
+  final TextRecognizer _textRecognizer = TextRecognizer();
+  List<TextBlock> _allBlocks = [];
+  String _status = "Upload image";
+  bool _loading = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _battery.addListener(() {
-      final val = double.tryParse(_battery.text);
-      if (val != null) setState(() => _batLvl = (val / 100).clamp(0.0, 1.0));
+  final TextEditingController _findController = TextEditingController();
+  final TextEditingController _replaceController = TextEditingController();
+  
+  String? _foundReplacement;
+  Rect? _replacementRect;
+  Color _replacementBg = Colors.black;
+
+  static const String _apiUrl = String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:10000/inpaint');
+
+  Future<void> _pickImage() async {
+    final XFile? file = await _picker.pickImage(source: ImageSource.gallery);
+    if (file != null) {
+      setState(() {
+        _imageFile = File(file.path);
+        _cleanedImage = null;
+        _allBlocks = [];
+        _foundReplacement = null;
+        _replacementRect = null;
+        _status = "Image uploaded";
+      });
+      final result = await _textRecognizer.processImage(InputImage.fromFilePath(file.path));
+      setState(() { _allBlocks = result.blocks; });
+    }
+  }
+
+  Future<void> _findAndReplace() async {
+    String findText = _findController.text.trim();
+    String replaceText = _replaceController.text.trim();
+    if (_imageFile == null || findText.isEmpty || replaceText.isEmpty) return;
+
+    setState(() { _loading = true; _status = "Finding '$findText'..."; });
+
+    Rect? targetRect;
+    Color bgColor = Colors.white;
+    final bytes = await _imageFile!.readAsBytes();
+    final decoded = img.decodeImage(bytes);
+
+    for (var block in _allBlocks) {
+      for (var line in block.lines) {
+        if (line.text.toLowerCase().contains(findText.toLowerCase())) {
+          targetRect = line.boundingBox;
+          break;
+        }
+      }
+      if (targetRect != null) break;
+    }
+    if (targetRect == null) { setState(() { _loading = false; _status = "Not found"; }); return; }
+
+    final mask = img.Image(width: decoded!.width, height: decoded.height);
+    img.fill(mask, color: img.ColorRgb8(0, 0, 0));
+    img.fillRect(mask, x1: targetRect.left.toInt(), y1: targetRect.top.toInt(), x2: targetRect.right.toInt(), y2: targetRect.bottom.toInt(), color: img.ColorRgb8(255, 255, 255));
+    final maskBytes = Uint8List.fromList(img.encodePng(mask));
+    
+    final cleaned = await _callMyAPI(bytes, maskBytes);
+    
+    setState(() {
+      _cleanedImage = cleaned;
+      _foundReplacement = replaceText;
+      _replacementRect = targetRect;
+      _replacementBg = bgColor;
+      _loading = false;
+      _status = cleaned != null ? "Done!" : "API failed";
     });
   }
 
-  @override
-  void dispose() {
-    for (var c in [_time, _battery, _title, _subTitle, _amount, _currency]) {
-      c.dispose();
-    }
-    super.dispose();
+  Future<Uint8List?> _callMyAPI(Uint8List imgB, Uint8List maskB) async {
+    try {
+      var req = http.MultipartRequest('POST', Uri.parse(_apiUrl));
+      req.fields['prompt'] = 'clean seamless background, no text';
+      req.files.add(http.MultipartFile.fromBytes('image', imgB, filename: 'image.png'));
+      req.files.add(http.MultipartFile.fromBytes('mask', maskB, filename: 'mask.png'));
+      var streamed = await req.send();
+      var res = await http.Response.fromStream(streamed);
+      if (res.statusCode == 200) return res.bodyBytes;
+      return null;
+    } catch (_) { return null; }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F14),
-      appBar: AppBar(title: const Text('Workspace'), backgroundColor: const Color(0xFF16161F)),
-      body: Center(
-        child: SingleChildScrollView(
-          child: Container(
-            width: 360, height: 640,
-            margin: const EdgeInsets.symmetric(vertical: 20),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E1E2E),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: Colors.white10, width: 2),
-            ),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      SizedBox(width: 50, child: TextField(controller: _time, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold), decoration: const InputDecoration(border: InputBorder.none, isDense: true))),
-                      Row(
-                        children: [
-                          SizedBox(width: 25, child: TextField(controller: _battery, textAlign: TextAlign.end, style: const TextStyle(color: Colors.white, fontSize: 12), decoration: const InputDecoration(border: InputBorder.none, isDense: true))),
-                          const Text("% ", style: TextStyle(color: Colors.white, fontSize: 12)),
-                          Container(
-                            width: 20, height: 10, padding: const EdgeInsets.all(1),
-                            decoration: Border.all(color: Colors.white70),
-                            child: Align(alignment: Alignment.centerLeft, child: Container(width: 14 * _batLvl, color: _batLvl < 0.2 ? Colors.red : Colors.green)),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const Spacer(),
-                Container(
-                  margin: const EdgeInsets.all(20),
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(color: const Color(0xFF252538), borderRadius: BorderRadius.circular(16)),
-                  child: Column(
-                    children: [
-                      TextField(controller: _title, textAlign: TextAlign.center, maxLines: null, style: const TextStyle(color: Colors.amberAccent, fontSize: 22, fontWeight: FontWeight.bold), decoration: const InputDecoration(border: InputBorder.none, isDense: true)),
-                      const SizedBox(height: 6),
-                      TextField(controller: _subTitle, textAlign: TextAlign.center, maxLines: null, style: const TextStyle(color: Color(0xFFCDD6F4), fontSize: 13), decoration: const InputDecoration(border: InputBorder.none, isDense: true)),
-                      const Divider(color: Colors.white12, height: 24),
-                      TextField(controller: _amount, textAlign: TextAlign.center, keyboardType: TextInputType.number, style: const TextStyle(color: Color(0xFFA6E3A1), fontSize: 44, fontWeight: FontWeight.black, fontFamily: 'monospace'), decoration: const InputDecoration(border: InputBorder.none, isDense: true)),
-                      TextField(controller: _currency, textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFFA6E3A1), fontSize: 15, fontWeight: FontWeight.bold, fontFamily: 'monospace'), decoration: const InputDecoration(border: InputBorder.none, isDense: true)),
-                    ],
-                  ),
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.all(16), color: const Color(0xFF11111B),
-                  child: const Row(children: [Icon(Icons.check_circle, color: Colors.greenAccent, size: 18), SizedBox(width: 8), Text("Logged via Secure API", style: TextStyle(color: Colors.grey, fontSize: 12))]),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+      appBar: AppBar(title: Text(_status)),
+      body: Column(children: [
+        Expanded(child: Center(child: _loading ? CircularProgressIndicator() : _imageFile == null ? Text("Upload image") : _cleanedImage != null ? Image.memory(_cleanedImage!) : Image.file(_imageFile!))),
+        Padding(padding: EdgeInsets.all(12), child: Column(children: [
+          TextField(controller: _findController, decoration: InputDecoration(labelText: "Text to find", border: OutlineInputBorder())),
+          SizedBox(height: 8),
+          TextField(controller: _replaceController, decoration: InputDecoration(labelText: "Replace with", border: OutlineInputBorder())),
+          SizedBox(height: 8),
+          ElevatedButton(onPressed: _findAndReplace, child: Text("REMOVE & REPLACE"))
+        ]))
+      ]),
+      floatingActionButton: FloatingActionButton(onPressed: _pickImage, child: Icon(Icons.add_a_photo)),
     );
   }
 }
