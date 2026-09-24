@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  body{font-family:sans-serif; padding:10px}
+  #stage{position:relative; display:inline-block; margin-top:10px}
+  #img{max-width:100%; display:block}
+ .word{
+    position:absolute;
+    background:white;
+    outline:none;
+    cursor:text;
+    border:1px dashed transparent;
+    padding:0 2px;
+    line-height:1;
+  }
+ .word:focus{border-color:#0084ff}
+</style>
+</head>
+<body>
+
+<input type="file" id="upload">
+<button id="editBtn">EDIT</button>
+
+<div id="stage">
+  <img id="img">
+  <div id="layers" style="position:absolute; left:0; top:0; width:100%; height:100%"></div>
+</div>
+
+<script>
+const img = document.getElementById('img');
+const layers = document.getElementById('layers');
+
+document.getElementById('upload').onchange = e => {
+  img.src = URL.createObjectURL(e.target.files[0]);
+  layers.innerHTML = '';
+}
+
+document.getElementById('editBtn').onclick = async () => {
+  layers.innerHTML = 'Detecting...';
+  const { data } = await Tesseract.recognize(img.src, 'eng');
+  layers.innerHTML = '';
+  const scale = img.naturalWidth / img.clientWidth;
+  data.words.forEach(w => {
+    const b = w.bbox;
+    const d = document.createElement('div');
+    d.className = 'word';
+    d.contentEditable = true;
+    d.innerText = w.text;
+    d.style.left = (b.x0 / scale) + 'px';
+    d.style.top = (b.y0 / scale) + 'px';
+    d.style.width = ((b.x1-b.x0)/scale + 10) + 'px';
+    d.style.fontSize = ((b.y1-b.y0)/scale) + 'px';
+    layers.appendChild(d);
+  });
+}
+</script>
+</body>
+</html>
