@@ -27,6 +27,7 @@
 <input type="file" id="upload">
 <button id="editBtn">EDIT ALL</button>
 <button id="saveBtn" style="background:#0084ff; color:white; border:none; padding:6px 12px; border-radius:4px;">SAVE</button>
+<p style="font-size:11px">Double-click a box to delete it</p>
 
 <div id="stage">
   <img id="img">
@@ -49,7 +50,9 @@ document.getElementById('editBtn').onclick = async () => {
   const scale = img.naturalWidth / img.clientWidth;
 
   data.words.forEach(w => {
-    if (w.text.trim() === '') return; // only ignore empty
+    if (w.text.trim() === '') return;
+    // FIX: Block ONLY fake wifi text, keep time & battery
+    if (w.text.includes('DREP') || w.text.includes('PARGM') || w.text.length > 15) return;
 
     const b = w.bbox;
     const d = document.createElement('div');
@@ -62,6 +65,7 @@ document.getElementById('editBtn').onclick = async () => {
     d.style.height = ((b.y1-b.y0)/scale + 2) + 'px';
     d.style.fontSize = ((b.y1-b.y0)/scale * 0.9) + 'px';
     d.style.fontFamily = 'sans-serif';
+    d.ondblclick = () => d.remove(); // double-click to delete fake
     layers.appendChild(d);
   });
 }
