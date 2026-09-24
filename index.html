@@ -9,25 +9,25 @@
   #img{max-width:100%; display:block}
 .word{
     position:absolute;
-    background:white;
-    outline:none;
-    cursor:text;
-    border:1px dashed #0084ff;
-    padding:0;
-    margin:0;
-    line-height:1;
-    overflow:hidden;
-    white-space:nowrap;
+    background:transparent; /* NOTHING CHANGES VISUALLY */
+    color:transparent; /* hide OCR text, show original image underneath */
+    outline:none; cursor:text;
+    border:1px dashed transparent;
+    padding:0; margin:0; line-height:1;
+    overflow:hidden; white-space:nowrap;
   }
-.word:focus{border-color:red; background:#fffbe6}
+.word:hover{border-color:#0084ff}
+.word:focus{
+    background:white; color:black; /* becomes visible ONLY when you click */
+    border-color:red;
+  }
+.word.top:focus{background:black; color:white;}
 </style>
 </head>
 <body>
-
 <input type="file" id="upload">
 <button id="editBtn">EDIT ALL</button>
 <button id="saveBtn" style="background:#0084ff; color:white; border:none; padding:6px 12px; border-radius:4px;">SAVE</button>
-<p style="font-size:11px">Double-click a box to delete it</p>
 
 <div id="stage">
   <img id="img">
@@ -35,67 +35,44 @@
 </div>
 
 <script>
-const img = document.getElementById('img');
-const layers = document.getElementById('layers');
+const img=document.getElementById('img'); const layers=document.getElementById('layers');
+document.getElementById('upload').onchange=e=>{img.src=URL.createObjectURL(e.target.files[0]); layers.innerHTML='';}
 
-document.getElementById('upload').onchange = e => {
-  img.src = URL.createObjectURL(e.target.files[0]);
-  layers.innerHTML = '';
-}
+document.getElementById('editBtn').onclick=async()=>{
+  layers.innerHTML='Detecting...';
+  const {data}=await Tesseract.recognize(img.src,'eng');
+  layers.innerHTML=''; const scale=img.naturalWidth/img.clientWidth;
+  data.words.forEach(w=>{
+    if(w.text.trim()==='') return;
+    // SIMPLE: keep battery as text, clean (430% -> 49%
+    let txt=w.text;
+    if(txt.includes('%')){ const m=txt.match(/(\d{1,3})%/); if(m) txt=m[0]; }
+    if(txt.includes('DREP')||txt.includes('PARGM')||txt.length>15) return;
 
-document.getElementById('editBtn').onclick = async () => {
-  layers.innerHTML = 'Detecting...';
-  const { data } = await Tesseract.recognize(img.src, 'eng');
-  layers.innerHTML = '';
-  const scale = img.naturalWidth / img.clientWidth;
-
-  data.words.forEach(w => {
-    if (w.text.trim() === '') return;
-    // FIX: Block ONLY fake wifi text, keep time & battery
-    if (w.text.includes('DREP') || w.text.includes('PARGM') || w.text.length > 15) return;
-
-    const b = w.bbox;
-    const d = document.createElement('div');
-    d.className = 'word';
-    d.contentEditable = true;
-    d.innerText = w.text;
-    d.style.left = (b.x0 / scale) + 'px';
-    d.style.top = (b.y0 / scale) + 'px';
-    d.style.width = ((b.x1-b.x0)/scale + 4) + 'px';
-    d.style.height = ((b.y1-b.y0)/scale + 2) + 'px';
-    d.style.fontSize = ((b.y1-b.y0)/scale * 0.9) + 'px';
-    d.style.fontFamily = 'sans-serif';
-    d.ondblclick = () => d.remove(); // double-click to delete fake
+    const b=w.bbox; const isTop=b.y0 < img.naturalHeight*0.18;
+    const d=document.createElement('div'); d.className='word'+(isTop?' top':'');
+    d.contentEditable=true; d.innerText=txt;
+    d.style.left=(b.x0/scale)+'px'; d.style.top=(b.y0/scale)+'px';
+    d.style.width=((b.x1-b.x0)/scale+6)+'px'; d.style.height=((b.y1-b.y0)/scale+4)+'px';
+    d.style.fontSize=((b.y1-b.y0)/scale*0.9)+'px';
+    d.ondblclick=()=>d.remove();
     layers.appendChild(d);
   });
 }
 
-document.getElementById('saveBtn').onclick = () => {
-  const canvas = document.createElement('canvas');
-  canvas.width = img.naturalWidth;
-  canvas.height = img.naturalHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(img, 0, 0);
-  const scale = img.naturalWidth / img.clientWidth;
-  document.querySelectorAll('.word').forEach(el => {
-    const x = parseFloat(el.style.left) * scale;
-    const y = parseFloat(el.style.top) * scale;
-    const h = parseFloat(el.style.height) * scale;
-    const fontSize = parseFloat(el.style.fontSize) * scale;
-    ctx.fillStyle = 'white';
-    ctx.fillRect(x, y, parseFloat(el.style.width)*scale, h);
-    ctx.fillStyle = 'black';
-    ctx.font = `${fontSize}px sans-serif`;
-    ctx.textBaseline = 'top';
-    ctx.fillText(el.innerText, x, y);
+document.getElementById('saveBtn').onclick=()=>{
+  const canvas=document.createElement('canvas'); canvas.width=img.naturalWidth; canvas.height=img.naturalHeight;
+  const ctx=canvas.getContext('2d'); ctx.drawImage(img,0,0); const scale=img.naturalWidth/img.clientWidth;
+  document.querySelectorAll('.word').forEach(el=>{
+    const x=parseFloat(el.style.left)*scale; const y=parseFloat(el.style.top)*scale;
+    const h=parseFloat(el.style.height)*scale; const fs=parseFloat(el.style.fontSize)*scale;
+    const isTop=parseFloat(el.style.top)<img.clientHeight*0.18;
+    ctx.fillStyle=isTop?'black':'white'; ctx.fillRect(x,y,parseFloat(el.style.width)*scale,h);
+    ctx.fillStyle=isTop?'white':'black'; ctx.font=`${fs}px sans-serif`; ctx.textBaseline='top';
+    ctx.fillText(el.innerText,x,y);
   });
-  const newSrc = canvas.toDataURL('image/png');
-  img.src = newSrc;
-  layers.innerHTML = '';
-  const a = document.createElement('a');
-  a.download = 'edited.png';
-  a.href = newSrc;
-  a.click();
+  const url=canvas.toDataURL('image/png'); img.src=url; layers.innerHTML='';
+  const a=document.createElement('a'); a.download='edited.png'; a.href=url; a.click();
 }
 </script>
 </body>
