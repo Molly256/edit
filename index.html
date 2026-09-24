@@ -7,16 +7,19 @@
   body{font-family:sans-serif; padding:10px}
   #stage{position:relative; display:inline-block; margin-top:10px}
   #img{max-width:100%; display:block}
-.word{
+ .word{
     position:absolute;
-    background:white;
+    background:white; /* this white covers ONLY the old text, so it looks same */
     outline:none;
     cursor:text;
-    border:1px dashed transparent;
-    padding:0 2px;
+    border:1px solid transparent;
+    padding:0;
+    margin:0;
     line-height:1;
+    overflow:hidden;
+    white-space:nowrap;
   }
-.word:focus{border-color:#0084ff}
+ .word:focus{border-color:#0084ff; background:#fffbe6}
 </style>
 </head>
 <body>
@@ -44,7 +47,13 @@ document.getElementById('editBtn').onclick = async () => {
   const { data } = await Tesseract.recognize(img.src, 'eng');
   layers.innerHTML = '';
   const scale = img.naturalWidth / img.clientWidth;
+
   data.words.forEach(w => {
+    // --- THIS STOPS FAKE CHANGES ---
+    if (w.confidence < 70) return;
+    if (w.text.replace(/[^A-Za-z0-9]/g,'').length < 2) return; // ignore R V X 1 E_
+    if (w.text === 'DREPARGM') return;
+
     const b = w.bbox;
     const d = document.createElement('div');
     d.className = 'word';
@@ -52,50 +61,36 @@ document.getElementById('editBtn').onclick = async () => {
     d.innerText = w.text;
     d.style.left = (b.x0 / scale) + 'px';
     d.style.top = (b.y0 / scale) + 'px';
-    d.style.width = ((b.x1-b.x0)/scale + 10) + 'px';
-    d.style.fontSize = ((b.y1-b.y0)/scale) + 'px';
+    d.style.width = ((b.x1-b.x0)/scale + 4) + 'px';
+    d.style.height = ((b.y1-b.y0)/scale + 2) + 'px';
+    d.style.fontSize = ((b.y1-b.y0)/scale * 0.9) + 'px';
+    d.style.fontFamily = 'sans-serif';
     layers.appendChild(d);
   });
 }
 
-// NEW SAVE LOGIC
 document.getElementById('saveBtn').onclick = () => {
-  if (!img.src) return alert('Upload image first');
-  if (layers.children.length === 0) return alert('Nothing to save - click EDIT first');
-
   const canvas = document.createElement('canvas');
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
   const ctx = canvas.getContext('2d');
-
-  // 1. Draw original image
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-  // 2. Draw each edited word onto image
+  ctx.drawImage(img, 0, 0);
   const scale = img.naturalWidth / img.clientWidth;
   document.querySelectorAll('.word').forEach(el => {
     const x = parseFloat(el.style.left) * scale;
     const y = parseFloat(el.style.top) * scale;
+    const h = parseFloat(el.style.height) * scale;
     const fontSize = parseFloat(el.style.fontSize) * scale;
-    const text = el.innerText;
-
-    // Cover old text with white
     ctx.fillStyle = 'white';
-    ctx.fillRect(x-2, y-2, parseFloat(el.style.width)*scale + 10, fontSize + 8);
-
-    // Write new text
+    ctx.fillRect(x, y, parseFloat(el.style.width)*scale, h);
     ctx.fillStyle = 'black';
     ctx.font = `${fontSize}px sans-serif`;
     ctx.textBaseline = 'top';
-    ctx.fillText(text, x, y);
+    ctx.fillText(el.innerText, x, y);
   });
-
-  // 3. Make canvas result the NEW original image
   const newSrc = canvas.toDataURL('image/png');
   img.src = newSrc;
-  layers.innerHTML = ''; // clear editable boxes
-
-  // 4. Download also
+  layers.innerHTML = '';
   const a = document.createElement('a');
   a.download = 'edited.png';
   a.href = newSrc;
