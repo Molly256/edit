@@ -7,25 +7,25 @@
   body{font-family:sans-serif; padding:10px}
   #stage{position:relative; display:inline-block; margin-top:10px}
   #img{max-width:100%; display:block}
- .word{
+.word{
     position:absolute;
-    background:white; /* this white covers ONLY the old text, so it looks same */
+    background:white;
     outline:none;
     cursor:text;
-    border:1px solid transparent;
+    border:1px dashed #0084ff;
     padding:0;
     margin:0;
     line-height:1;
     overflow:hidden;
     white-space:nowrap;
   }
- .word:focus{border-color:#0084ff; background:#fffbe6}
+.word:focus{border-color:red; background:#fffbe6}
 </style>
 </head>
 <body>
 
 <input type="file" id="upload">
-<button id="editBtn">EDIT</button>
+<button id="editBtn">EDIT ALL</button>
 <button id="saveBtn" style="background:#0084ff; color:white; border:none; padding:6px 12px; border-radius:4px;">SAVE</button>
 
 <div id="stage">
@@ -49,10 +49,7 @@ document.getElementById('editBtn').onclick = async () => {
   const scale = img.naturalWidth / img.clientWidth;
 
   data.words.forEach(w => {
-    // --- THIS STOPS FAKE CHANGES ---
-    if (w.confidence < 70) return;
-    if (w.text.replace(/[^A-Za-z0-9]/g,'').length < 2) return; // ignore R V X 1 E_
-    if (w.text === 'DREPARGM') return;
+    if (w.text.trim() === '') return; // only ignore empty
 
     const b = w.bbox;
     const d = document.createElement('div');
