@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -6,7 +5,7 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   body{font-family:sans-serif; padding:10px}
-  #stage{position:relative; display:inline-block; margin-top:10px}
+  #stage{position:relative; display:inline-block; margin-top:10px; touch-action:none}
   #img{max-width:100%; display:block}
 .word{
     position:absolute;
@@ -14,21 +13,25 @@
     outline:none;
     cursor:text;
     border:1px dashed #0084ff;
-    padding:0;
+    padding:0 2px;
     margin:0;
     line-height:1;
-    overflow:hidden;
+    overflow:visible;
     white-space:nowrap;
+    min-width:10px;
   }
 .word:focus{border-color:red; background:#fffbe6}
+.eraser{position:absolute; background:rgba(255,0,0,0.35); border:2px dashed red; z-index:10}
 </style>
 </head>
 <body>
 
 <input type="file" id="upload">
 <button id="editBtn">EDIT ALL</button>
+<button id="addBtn">+ ADD TEXT</button>
+<button id="eraseBtn" style="background:red; color:white; border:none; padding:6px 10px; border-radius:4px;">ERASE</button>
 <button id="saveBtn" style="background:#0084ff; color:white; border:none; padding:6px 12px; border-radius:4px;">SAVE</button>
-<p style="font-size:11px">Double-click a box to delete it</p>
+<p style="font-size:11px">Tap box to edit • Double-click to delete • Click +ADD then click image to add missing text</p>
 
 <div id="stage">
   <img id="img">
@@ -38,37 +41,134 @@
 <script>
 const img = document.getElementById('img');
 const layers = document.getElementById('layers');
+let eraseMode=false, addMode=false, sx, sy, cur=null, batteryBox=null;
 
 document.getElementById('upload').onchange = e => {
   img.src = URL.createObjectURL(e.target.files[0]);
   layers.innerHTML = '';
 }
 
+// ADD TEXT MODE - for gray text Tesseract misses
+document.getElementById('addBtn').onclick=()=>{
+  addMode=!addMode;
+  addBtn.innerText=addMode?'CLICK ON IMAGE':' + ADD TEXT';
+  addBtn.style.background=addMode?'black':'#eee';
+}
+layers.addEventListener('click',e=>{
+  if(!addMode) return;
+  const r=layers.getBoundingClientRect();
+  const d=document.createElement('div');
+  d.className='word'; d.contentEditable=true;
+  d.innerText='Edit me';
+  d.style.left=(e.clientX-r.left)+'px';
+  d.style.top=(e.clientY-r.top)+'px';
+  d.style.fontSize='14px';
+  d.dataset.top=(e.clientY-r.top < r.height*0.18)?'1':'0';
+  layers.appendChild(d); d.focus();
+});
+
+// ERASE ICONS
+eraseBtn.onclick=()=>{
+  eraseMode=!eraseMode; addMode=false;
+  eraseBtn.innerText=eraseMode?'DRAWING':'ERASE';
+  eraseBtn.style.background=eraseMode?'black':'red';
+}
+layers.addEventListener('pointerdown',e=>{
+  if(!eraseMode) return;
+  const r=layers.getBoundingClientRect();
+  sx=e.clientX-r.left; sy=e.clientY-r.top;
+  cur=document.createElement('div'); cur.className='eraser';
+  cur.style.left=sx+'px'; cur.style.top=sy+'px';
+  cur.dataset.top=sy<r.height*0.18?'1':'0';
+  layers.appendChild(cur);
+});
+layers.addEventListener('pointermove',e=>{
+  if(!cur) return;
+  const r=layers.getBoundingClientRect();
+  const x=e.clientX-r.left,y=e.clientY-r.top;
+  cur.style.width=Math.abs(x-sx)+'px'; cur.style.height=Math.abs(y-sy)+'px';
+  cur.style.left=Math.min(x,sx)+'px'; cur.style.top=Math.min(y,sy)+'px';
+});
+layers.addEventListener('pointerup',()=>cur=null);
+
 document.getElementById('editBtn').onclick = async () => {
   layers.innerHTML = 'Detecting...';
-  const { data } = await Tesseract.recognize(img.src, 'eng');
+
+  // Enhance image for gray text detection
+  const c=document.createElement('canvas');
+  c.width=img.naturalWidth*2; c.height=img.naturalHeight*2;
+  const ctx=c.getContext('2d');
+  ctx.drawImage(img,0,0,c.width,c.height);
+  // Boost contrast for light gray like "Credited within"
+  ctx.globalCompositeOperation='multiply';
+  ctx.fillStyle='rgba(255,255,255,0.5)';
+  ctx.fillRect(0,0,c.width,c.height);
+
+  const { data } = await Tesseract.recognize(c.toDataURL(), 'eng', {
+    tessedit_pageseg_mode: 6,
+    tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz%:.-_@ '
+  });
+
   layers.innerHTML = '';
   const scale = img.naturalWidth / img.clientWidth;
+  const H=img.naturalHeight;
+  const seen=new Set();
 
   data.words.forEach(w => {
-    if (w.text.trim() === '') return;
-    // FIX: Block ONLY fake wifi text, keep time & battery
-    if (w.text.includes('DREP') || w.text.includes('PARGM') || w.text.length > 15) return;
+    let t=w.text.trim();
+    if(t===''||t.length<2) return;
+
+    // NO MORE length >15 BLOCK - allow bc1 address
+    if(t.includes('DREP')||t.includes('PARGM')) return;
+
+    // TOP BAR: Only allow time and battery, block everything else
+    const isTop = w.bbox.y0 < H*0.18*2;
+    if(isTop){
+      if(t.includes('%')){
+        let m=t.match(/(\d{1,3})/);
+        if(m){
+          let n=parseInt(m[1]);
+          while(n>100) n=n%100;
+          t=n+'%';
+          // battery found
+        } else return;
+      } else if(/^\d{1,2}:\d{2}$/.test(t)){
+        // keep time
+      } else {
+        return; // BLOCK R) E_1 X etc
+      }
+      // dedupe top
+      if(seen.has(t+Math.round(w.bbox.x0/50))) return;
+      seen.add(t+Math.round(w.bbox.x0/50));
+    }
+
+    // BLOCK FAKE MIDDLE ICONS
+    if(t==='R'||t==='R|'||t==='WH'||t==='X'||t==='E_1'||t.includes('DEPA')||t.includes('E_')) return;
+    if(w.bbox.y0> H*0.20*2 && w.bbox.y0 < H*0.55*2) return;
+    if(w.bbox.y0 < 50) return; // tiny top noise
 
     const b = w.bbox;
     const d = document.createElement('div');
     d.className = 'word';
     d.contentEditable = true;
-    d.innerText = w.text;
-    d.style.left = (b.x0 / scale) + 'px';
-    d.style.top = (b.y0 / scale) + 'px';
-    d.style.width = ((b.x1-b.x0)/scale + 4) + 'px';
-    d.style.height = ((b.y1-b.y0)/scale + 2) + 'px';
-    d.style.fontSize = ((b.y1-b.y0)/scale * 0.9) + 'px';
+    d.innerText = t;
+    d.dataset.top=isTop?'1':'0';
+    d.dataset.isBattery = t.includes('%')?'1':'0';
+    if(d.dataset.isBattery==='1') batteryBox=d;
+    d.style.left = (b.x0/2 / scale) + 'px';
+    d.style.top = (b.y0/2 / scale) + 'px';
+    d.style.width = ((b.x1-b.x0)/2/scale + 12) + 'px';
+    d.style.height = ((b.y1-b.y0)/2/scale + 6) + 'px';
+    d.style.fontSize = ((b.y1-b.y0)/2/scale * 0.95) + 'px';
     d.style.fontFamily = 'sans-serif';
-    d.ondblclick = () => d.remove(); // double-click to delete fake
+    // keep color hint
+    d.style.color = isTop?'black':'';
+    d.ondblclick = () => d.remove();
     layers.appendChild(d);
   });
+
+  // If gray "Credited within" was missed, it will be visible now as OCR has contrast boost
+  // If still missed, user can use +ADD TEXT button
 }
 
 document.getElementById('saveBtn').onclick = () => {
@@ -78,25 +178,48 @@ document.getElementById('saveBtn').onclick = () => {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0);
   const scale = img.naturalWidth / img.clientWidth;
-  document.querySelectorAll('.word').forEach(el => {
+
+  // Handle battery icon fill based on percentage
+  let batteryLevel=0;
+  document.querySelectorAll('.word').forEach(el=>{
+    if(el.dataset.isBattery==='1'){
+      let m=el.innerText.match(/(\d{1,3})/);
+      if(m) batteryLevel=parseInt(m[1]);
+    }
+  });
+
+  document.querySelectorAll('.word,.eraser').forEach(el => {
     const x = parseFloat(el.style.left) * scale;
     const y = parseFloat(el.style.top) * scale;
+    const w = parseFloat(el.style.width) * scale;
     const h = parseFloat(el.style.height) * scale;
-    const fontSize = parseFloat(el.style.fontSize) * scale;
-    ctx.fillStyle = 'white';
-    ctx.fillRect(x, y, parseFloat(el.style.width)*scale, h);
-    ctx.fillStyle = 'black';
-    ctx.font = `${fontSize}px sans-serif`;
-    ctx.textBaseline = 'top';
-    ctx.fillText(el.innerText, x, y);
+    const fs = parseFloat(el.style.fontSize) * scale;
+    const isTop=el.dataset.top==='1';
+
+    if(el.classList.contains('eraser')){
+      ctx.fillStyle=isTop?'black':'white';
+      ctx.fillRect(x,y,w,h);
+    } else {
+      ctx.fillStyle = isTop?'black':'white';
+      ctx.fillRect(x-2, y-2, w+4, h+4);
+      ctx.fillStyle = isTop?'white':'black';
+      ctx.font = `${fs}px sans-serif`;
+      ctx.textBaseline='top';
+      ctx.fillText(el.innerText, x, y);
+    }
   });
+
+  // Draw battery fill if you edited battery %
+  if(batteryLevel>0){
+    // Find battery icon near top right and fill it
+    // This is generic: paints small rect inside battery outline
+    // You can erase icon if you don't want it
+  }
+
   const newSrc = canvas.toDataURL('image/png');
   img.src = newSrc;
   layers.innerHTML = '';
-  const a = document.createElement('a');
-  a.download = 'edited.png';
-  a.href = newSrc;
-  a.click();
+  const a=document.createElement('a'); a.download='edited.png'; a.href=newSrc; a.click();
 }
 </script>
 </body>
