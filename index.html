@@ -4,34 +4,43 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
-  body{font-family:sans-serif; padding:10px}
-  #stage{position:relative; display:inline-block; margin-top:10px; touch-action:none}
-  #img{max-width:100%; display:block}
-.word{
-    position:absolute;
-    background:white;
-    outline:none;
-    cursor:text;
-    border:1px dashed #0084ff;
-    padding:0 2px;
-    margin:0;
-    line-height:1;
-    overflow:visible;
-    white-space:nowrap;
-    min-width:10px;
+  body { font-family: sans-serif; padding: 10px; background: #f0f2f5; color: #333; }
+  #controls { margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; font-weight: bold; }
+  #editBtn { background: #0084ff; color: white; border: none; }
+  #saveBtn { background: #28a745; color: white; border: none; }
+  #btnRed { background: #dc3545; color: white; border: none; }
+  #btnGreen { background: #28a745; color: white; border: none; }
+  #eraserBtn { background: #6c757d; color: white; border: none; }
+  #eraserBtn.active { background: #ffc107; color: black; outline: 2px solid black; }
+  #stage { position: relative; display: inline-block; margin-top: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.15); }
+  #img { max-width: 100%; display: block; }
+  .word {
+    position: absolute;
+    outline: none;
+    cursor: text;
+    border: 1px dashed #0084ff;
+    padding: 0;
+    margin: 0;
+    line-height: 1;
+    overflow: hidden;
+    white-space: nowrap;
   }
-.word:focus{border-color:red; background:#fffbe6}
-.eraser{position:absolute; background:rgba(255,0,0,0.35); border:2px dashed red; z-index:10}
+  .word:focus { border-color: red; outline: 1px solid red; }
+  .eraser-cursor { cursor: crosshair !important; }
 </style>
 </head>
 <body>
 
-<input type="file" id="upload">
-<button id="editBtn">EDIT ALL</button>
-<button id="addBtn">+ ADD TEXT</button>
-<button id="eraseBtn" style="background:red; color:white; border:none; padding:6px 10px; border-radius:4px;">ERASE</button>
-<button id="saveBtn" style="background:#0084ff; color:white; border:none; padding:6px 12px; border-radius:4px;">SAVE</button>
-<p style="font-size:11px">Tap box to edit • Double-click to delete • Click +ADD then click image to add missing text</p>
+<div id="controls">
+  <input type="file" id="upload" accept="image/*">
+  <button id="editBtn">EDIT ALL</button>
+  <button id="btnRed">BATTERY -</button>
+  <button id="btnGreen">BATTERY +</button>
+  <button id="eraserBtn">ERASER TOOL</button>
+  <button id="saveBtn">SAVE</button>
+</div>
+<p style="font-size:11px; margin: 5px 0;">Double-click a text box to delete it. When Eraser Tool is yellow, click anywhere on the image to wipe away icons.</p>
 
 <div id="stage">
   <img id="img">
@@ -41,185 +50,189 @@
 <script>
 const img = document.getElementById('img');
 const layers = document.getElementById('layers');
-let eraseMode=false, addMode=false, sx, sy, cur=null, batteryBox=null;
+const eraserBtn = document.getElementById('eraserBtn');
+let isEraserActive = false;
+let erasedRegions = []; // Stores coordinate maps of wiped areas
 
 document.getElementById('upload').onchange = e => {
-  img.src = URL.createObjectURL(e.target.files[0]);
-  layers.innerHTML = '';
+  if(e.target.files[0]) {
+    img.src = URL.createObjectURL(e.target.files[0]);
+    layers.innerHTML = '';
+    erasedRegions = [];
+  }
 }
 
-// ADD TEXT MODE - for gray text Tesseract misses
-document.getElementById('addBtn').onclick=()=>{
-  addMode=!addMode;
-  addBtn.innerText=addMode?'CLICK ON IMAGE':' + ADD TEXT';
-  addBtn.style.background=addMode?'black':'#eee';
-}
-layers.addEventListener('click',e=>{
-  if(!addMode) return;
-  const r=layers.getBoundingClientRect();
-  const d=document.createElement('div');
-  d.className='word'; d.contentEditable=true;
-  d.innerText='Edit me';
-  d.style.left=(e.clientX-r.left)+'px';
-  d.style.top=(e.clientY-r.top)+'px';
-  d.style.fontSize='14px';
-  d.dataset.top=(e.clientY-r.top < r.height*0.18)?'1':'0';
-  layers.appendChild(d); d.focus();
-});
+// Toggle eraser tool state
+eraserBtn.onclick = () => {
+  isEraserActive = !isEraserActive;
+  eraserBtn.classList.toggle('active', isEraserActive);
+  layers.classList.toggle('eraser-cursor', isEraserActive);
+};
 
-// ERASE ICONS
-eraseBtn.onclick=()=>{
-  eraseMode=!eraseMode; addMode=false;
-  eraseBtn.innerText=eraseMode?'DRAWING':'ERASE';
-  eraseBtn.style.background=eraseMode?'black':'red';
-}
-layers.addEventListener('pointerdown',e=>{
-  if(!eraseMode) return;
-  const r=layers.getBoundingClientRect();
-  sx=e.clientX-r.left; sy=e.clientY-r.top;
-  cur=document.createElement('div'); cur.className='eraser';
-  cur.style.left=sx+'px'; cur.style.top=sy+'px';
-  cur.dataset.top=sy<r.height*0.18?'1':'0';
-  layers.appendChild(cur);
-});
-layers.addEventListener('pointermove',e=>{
-  if(!cur) return;
-  const r=layers.getBoundingClientRect();
-  const x=e.clientX-r.left,y=e.clientY-r.top;
-  cur.style.width=Math.abs(x-sx)+'px'; cur.style.height=Math.abs(y-sy)+'px';
-  cur.style.left=Math.min(x,sx)+'px'; cur.style.top=Math.min(y,sy)+'px';
-});
-layers.addEventListener('pointerup',()=>cur=null);
-
-document.getElementById('editBtn').onclick = async () => {
-  layers.innerHTML = 'Detecting...';
-
-  // Enhance image for gray text detection
-  const c=document.createElement('canvas');
-  c.width=img.naturalWidth*2; c.height=img.naturalHeight*2;
-  const ctx=c.getContext('2d');
-  ctx.drawImage(img,0,0,c.width,c.height);
-  // Boost contrast for light gray like "Credited within"
-  ctx.globalCompositeOperation='multiply';
-  ctx.fillStyle='rgba(255,255,255,0.5)';
-  ctx.fillRect(0,0,c.width,c.height);
-
-  const { data } = await Tesseract.recognize(c.toDataURL(), 'eng', {
-    tessedit_pageseg_mode: 6,
-    tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz%:.-_@ '
-  });
-
-  layers.innerHTML = '';
+// Handle manual icon erasing on click
+layers.onclick = (e) => {
+  if (!isEraserActive) return;
+  const rect = layers.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const clickY = e.clientY - rect.top;
   const scale = img.naturalWidth / img.clientWidth;
-  const H=img.naturalHeight;
-  const seen=new Set();
 
-  data.words.forEach(w => {
-    let t=w.text.trim();
-    if(t===''||t.length<2) return;
-
-    // NO MORE length >15 BLOCK - allow bc1 address
-    if(t.includes('DREP')||t.includes('PARGM')) return;
-
-    // TOP BAR: Only allow time and battery, block everything else
-    const isTop = w.bbox.y0 < H*0.18*2;
-    if(isTop){
-      if(t.includes('%')){
-        let m=t.match(/(\d{1,3})/);
-        if(m){
-          let n=parseInt(m[1]);
-          while(n>100) n=n%100;
-          t=n+'%';
-          // battery found
-        } else return;
-      } else if(/^\d{1,2}:\d{2}$/.test(t)){
-        // keep time
-      } else {
-        return; // BLOCK R) E_1 X etc
-      }
-      // dedupe top
-      if(seen.has(t+Math.round(w.bbox.x0/50))) return;
-      seen.add(t+Math.round(w.bbox.x0/50));
-    }
-
-    // BLOCK FAKE MIDDLE ICONS
-    if(t==='R'||t==='R|'||t==='WH'||t==='X'||t==='E_1'||t.includes('DEPA')||t.includes('E_')) return;
-    if(w.bbox.y0> H*0.20*2 && w.bbox.y0 < H*0.55*2) return;
-    if(w.bbox.y0 < 50) return; // tiny top noise
-
-    const b = w.bbox;
-    const d = document.createElement('div');
-    d.className = 'word';
-    d.contentEditable = true;
-    d.innerText = t;
-    d.dataset.top=isTop?'1':'0';
-    d.dataset.isBattery = t.includes('%')?'1':'0';
-    if(d.dataset.isBattery==='1') batteryBox=d;
-    d.style.left = (b.x0/2 / scale) + 'px';
-    d.style.top = (b.y0/2 / scale) + 'px';
-    d.style.width = ((b.x1-b.x0)/2/scale + 12) + 'px';
-    d.style.height = ((b.y1-b.y0)/2/scale + 6) + 'px';
-    d.style.fontSize = ((b.y1-b.y0)/2/scale * 0.95) + 'px';
-    d.style.fontFamily = 'sans-serif';
-    // keep color hint
-    d.style.color = isTop?'black':'';
-    d.ondblclick = () => d.remove();
-    layers.appendChild(d);
-  });
-
-  // If gray "Credited within" was missed, it will be visible now as OCR has contrast boost
-  // If still missed, user can use +ADD TEXT button
-}
-
-document.getElementById('saveBtn').onclick = () => {
   const canvas = document.createElement('canvas');
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0);
+
+  // Sample real surrounding neighborhood pixel background color
+  const sampleX = Math.round(clickX * scale);
+  const sampleY = Math.round(clickY * scale);
+  const p = ctx.getImageData(Math.max(0, sampleX - 5), Math.max(0, sampleY - 5), 1, 1).data;
+  const bgRGB = `rgb(${p[0]},${p[1]},${p[2]})`;
+
+  // Draw visual eraser placeholder cover on user interface 
+  const eraseBox = document.createElement('div');
+  eraseBox.style.position = 'absolute';
+  eraseBox.style.left = (clickX - 12) + 'px';
+  eraseBox.style.top = (clickY - 12) + 'px';
+  eraseBox.style.width = '24px';
+  eraseBox.style.height = '24px';
+  eraseBox.style.background = bgRGB;
+  eraseBox.className = 'erased-patch';
+  eraseBox.setAttribute('data-raw-x', (clickX - 12) * scale);
+  eraseBox.setAttribute('data-raw-y', (clickY - 12) * scale);
+  eraseBox.setAttribute('data-raw-w', 24 * scale);
+  eraseBox.setAttribute('data-raw-h', 24 * scale);
+  eraseBox.setAttribute('data-bg', bgRGB);
+  eraseBox.ondblclick = () => eraseBox.remove();
+  layers.appendChild(eraseBox);
+};
+
+document.getElementById('editBtn').onclick = async () => {
+  if(!img.src) return alert("Please upload an image first!");
+  layers.innerHTML = 'Optimizing Contrast & Extracting Text...';
+  
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = img.naturalWidth;
+  tempCanvas.height = img.naturalHeight;
+  const tempCtx = tempCanvas.getContext('2d');
+  tempCtx.drawImage(img, 0, 0);
+  
+  // High-contrast pixel filter engine so Tesseract sees grey/colored text perfectly
+  const imgData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+  const dataArr = imgData.data;
+  for (let i = 0; i < dataArr.length; i += 4) {
+    let brightness = (dataArr[i] + dataArr[i+1] + dataArr[i+2]) / 3;
+    let v = (brightness < 200) ? 0 : 255;
+    dataArr[i] = dataArr[i+1] = dataArr[i+2] = v;
+  }
+  tempCtx.putImageData(imgData, 0, 0);
+
+  const { data } = await Tesseract.recognize(tempCanvas.toDataURL(), 'eng');
+  layers.innerHTML = '';
   const scale = img.naturalWidth / img.clientWidth;
 
-  // Handle battery icon fill based on percentage
-  let batteryLevel=0;
-  document.querySelectorAll('.word').forEach(el=>{
-    if(el.dataset.isBattery==='1'){
-      let m=el.innerText.match(/(\d{1,3})/);
-      if(m) batteryLevel=parseInt(m[1]);
+  // Background sampler setup
+  const baseCanvas = document.createElement('canvas');
+  baseCanvas.width = img.naturalWidth;
+  baseCanvas.height = img.naturalHeight;
+  const baseCtx = baseCanvas.getContext('2d');
+  baseCtx.drawImage(img, 0, 0);
+
+  data.words.forEach(w => {
+    if (w.text.trim() === '') return; // Stripped out restrictive word filters
+
+    const b = w.bbox;
+    const sX = Math.floor(b.x0);
+    const sY = Math.floor(b.y0);
+    const pixel = baseCtx.getImageData(Math.max(0, sX - 2), Math.max(0, sY - 2), 1, 1).data;
+    const bgRGB = `rgb(${pixel[0]},${pixel[1]},${pixel[2]})`;
+    const isDark = ((pixel[0] + pixel[1] + pixel[2]) / 3) < 130;
+    const textRGB = isDark ? 'white' : 'black';
+
+    const d = document.createElement('div');
+    d.className = 'word';
+    d.contentEditable = true;
+    d.innerText = w.text;
+    
+    // Tag battery text elements dynamically for target hooks
+    if(w.text.includes('%') || /^\d+\$/.test(w.text) && (b.x0 > tempCanvas.width * 0.7 && b.y0 < tempCanvas.height * 0.1)) {
+      d.classList.add('battery-node');
+    }
+
+    d.setAttribute('data-bg', bgRGB);
+    d.setAttribute('data-text-color', textRGB);
+    d.style.background = bgRGB;
+    d.style.color = textRGB;
+    
+    d.style.left = (b.x0 / scale) + 'px';
+    d.style.top = (b.y0 / scale) + 'px';
+    d.style.width = ((b.x1 - b.x0) / scale + 6) + 'px';
+    d.style.height = ((b.y1 - b.y0) / scale + 2) + 'px';
+    d.style.fontSize = ((b.y1 - b.y0) / scale * 0.95) + 'px';
+    d.style.fontFamily = 'sans-serif';
+    d.ondblclick = () => d.remove();
+    layers.appendChild(d);
+  });
+};
+
+// Battery Modifier Controls
+function changeBatteryValue(amount) {
+  document.querySelectorAll('.battery-node').forEach(el => {
+    let num = parseInt(el.innerText.replace(/[^0-3]/g, ''));
+    if (!isNaN(num)) {
+      let nextNum = Math.max(0, Math.min(100, num + amount));
+      el.innerText = el.innerText.includes('%') ? nextNum + '%' : nextNum;
     }
   });
+}
+document.getElementById('btnRed').onclick = () => changeBatteryValue(-5);
+document.getElementById('btnGreen').onclick = () => changeBatteryValue(5);
 
-  document.querySelectorAll('.word,.eraser').forEach(el => {
+// Render Changes onto an unmodified base canvas layer
+document.getElementById('saveBtn').onclick = () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0); // Draws pristine native image state first
+  const scale = img.naturalWidth / img.clientWidth;
+  
+  // Wipe out erased icon positions cleanly
+  document.querySelectorAll('.erased-patch').forEach(patch => {
+    ctx.fillStyle = patch.getAttribute('data-bg');
+    ctx.fillRect(
+      parseFloat(patch.getAttribute('data-raw-x')),
+      parseFloat(patch.getAttribute('data-raw-y')),
+      parseFloat(patch.getAttribute('data-raw-w')),
+      parseFloat(patch.getAttribute('data-raw-h'))
+    );
+  });
+
+  // Stamp text alterations with accurate local colored bounding fills
+  document.querySelectorAll('.word').forEach(el => {
     const x = parseFloat(el.style.left) * scale;
     const y = parseFloat(el.style.top) * scale;
     const w = parseFloat(el.style.width) * scale;
     const h = parseFloat(el.style.height) * scale;
-    const fs = parseFloat(el.style.fontSize) * scale;
-    const isTop=el.dataset.top==='1';
-
-    if(el.classList.contains('eraser')){
-      ctx.fillStyle=isTop?'black':'white';
-      ctx.fillRect(x,y,w,h);
-    } else {
-      ctx.fillStyle = isTop?'black':'white';
-      ctx.fillRect(x-2, y-2, w+4, h+4);
-      ctx.fillStyle = isTop?'white':'black';
-      ctx.font = `${fs}px sans-serif`;
-      ctx.textBaseline='top';
-      ctx.fillText(el.innerText, x, y);
-    }
+    const fontSize = parseFloat(el.style.fontSize) * scale;
+    
+    ctx.fillStyle = el.getAttribute('data-bg');
+    ctx.fillRect(x, y, w, h);
+    
+    ctx.fillStyle = el.getAttribute('data-text-color');
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textBaseline = 'top';
+    ctx.fillText(el.innerText, x, y);
   });
-
-  // Draw battery fill if you edited battery %
-  if(batteryLevel>0){
-    // Find battery icon near top right and fill it
-    // This is generic: paints small rect inside battery outline
-    // You can erase icon if you don't want it
-  }
-
+  
   const newSrc = canvas.toDataURL('image/png');
   img.src = newSrc;
   layers.innerHTML = '';
-  const a=document.createElement('a'); a.download='edited.png'; a.href=newSrc; a.click();
+  
+  const a = document.createElement('a');
+  a.download = 'edited_screenshot.png';
+  a.href = newSrc;
+  a.click();
 }
 </script>
 </body>
