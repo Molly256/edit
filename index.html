@@ -9,24 +9,23 @@
   #img{max-width:100%; display:block}
 .word{
     position:absolute;
-    background:transparent; /* NOTHING CHANGES VISUALLY */
-    color:transparent; /* hide OCR text, show original image underneath */
+    background:transparent;
+    color:transparent;
     outline:none; cursor:text;
     border:1px dashed transparent;
     padding:0; margin:0; line-height:1;
     overflow:hidden; white-space:nowrap;
   }
 .word:hover{border-color:#0084ff}
-.word:focus{
-    background:white; color:black; /* becomes visible ONLY when you click */
-    border-color:red;
-  }
+.word:focus{ background:white; color:black; border-color:red;}
 .word.top:focus{background:black; color:white;}
+.eraser{position:absolute; background:rgba(255,0,0,0.4); border:2px solid red}
 </style>
 </head>
 <body>
 <input type="file" id="upload">
 <button id="editBtn">EDIT ALL</button>
+<button id="eraseBtn" style="background:red; color:white; border:none; padding:6px 10px; border-radius:4px;">ERASE ICON</button>
 <button id="saveBtn" style="background:#0084ff; color:white; border:none; padding:6px 12px; border-radius:4px;">SAVE</button>
 
 <div id="stage">
@@ -36,31 +35,49 @@
 
 <script>
 const img=document.getElementById('img'); const layers=document.getElementById('layers');
+let eraseMode=false, startX, startY, curBox=null;
 document.getElementById('upload').onchange=e=>{img.src=URL.createObjectURL(e.target.files[0]); layers.innerHTML='';}
+document.getElementById('eraseBtn').onclick=()=>{
+  eraseMode=!eraseMode;
+  eraseBtn.innerText=eraseMode?'DRAW TO ERASE':'ERASE ICON';
+}
+layers.addEventListener('pointerdown',e=>{
+  if(!eraseMode) return;
+  const r=layers.getBoundingClientRect();
+  startX=e.clientX-r.left; startY=e.clientY-r.top;
+  curBox=document.createElement('div'); curBox.className='eraser';
+  curBox.style.left=startX+'px'; curBox.style.top=startY+'px';
+  curBox.dataset.top=(startY < r.height*0.18)?'1':'0';
+  layers.appendChild(curBox);
+});
+layers.addEventListener('pointermove',e=>{
+  if(!curBox) return;
+  const r=layers.getBoundingClientRect();
+  const x=e.clientX-r.left, y=e.clientY-r.top;
+  curBox.style.width=Math.abs(x-startX)+'px'; curBox.style.height=Math.abs(y-startY)+'px';
+  curBox.style.left=Math.min(x,startX)+'px'; curBox.style.top=Math.min(y,startY)+'px';
+});
+layers.addEventListener('pointerup',()=>curBox=null);
 
 document.getElementById('editBtn').onclick=async()=>{
   layers.innerHTML='Detecting...';
   const {data}=await Tesseract.recognize(img.src,'eng');
-  layers.innerHTML=''; const scale=img.naturalWidth/img.clientWidth;
+  layers.innerHTML=''; const scale=img.naturalWidth/img.clientWidth; const H=img.naturalHeight;
   data.words.forEach(w=>{
     if(w.text.trim()==='') return;
-    // FIX ONLY FAKE BLACK BOXES - START
-    if(w.confidence < 70) return;
-    if((w.bbox.y1 - w.bbox.y0) < 20) return;
-    if(w.text.trim().length === 1) return;
-    if(w.bbox.y0 > img.naturalHeight*0.28 && w.bbox.y0 < img.naturalHeight*0.52) return;
-    // FIX ONLY FAKE BLACK BOXES - END
-    // SIMPLE: keep battery as text, clean (430% -> 49%
-    let txt=w.text;
+    // ONLY block fake toolbar - allow all real texts
+    if(w.text.trim().length===1 &&!w.text.includes('%')) return;
+    if(w.bbox.y0 > H*0.28 && w.bbox.y0 < H*0.52) return;
+    let txt=w.text.trim();
     if(txt.includes('%')){ const m=txt.match(/(\d{1,3})%/); if(m) txt=m[0]; }
     if(txt.includes('DREP')||txt.includes('PARGM')||txt.length>15) return;
-
-    const b=w.bbox; const isTop=b.y0 < img.naturalHeight*0.18;
+    const b=w.bbox; const isTop=b.y0 < H*0.18;
     const d=document.createElement('div'); d.className='word'+(isTop?' top':'');
-    d.contentEditable=true; d.innerText=txt;
+    d.contentEditable=true; d.innerText=txt; d.dataset.top=isTop?'1':'0';
     d.style.left=(b.x0/scale)+'px'; d.style.top=(b.y0/scale)+'px';
     d.style.width=((b.x1-b.x0)/scale+6)+'px'; d.style.height=((b.y1-b.y0)/scale+4)+'px';
     d.style.fontSize=((b.y1-b.y0)/scale*0.9)+'px';
+    d.addEventListener('pointerdown',()=>{ if(!eraseMode) setTimeout(()=>d.focus(),10); });
     d.ondblclick=()=>d.remove();
     layers.appendChild(d);
   });
@@ -69,13 +86,18 @@ document.getElementById('editBtn').onclick=async()=>{
 document.getElementById('saveBtn').onclick=()=>{
   const canvas=document.createElement('canvas'); canvas.width=img.naturalWidth; canvas.height=img.naturalHeight;
   const ctx=canvas.getContext('2d'); ctx.drawImage(img,0,0); const scale=img.naturalWidth/img.clientWidth;
-  document.querySelectorAll('.word').forEach(el=>{
+  document.querySelectorAll('.word,.eraser').forEach(el=>{
     const x=parseFloat(el.style.left)*scale; const y=parseFloat(el.style.top)*scale;
-    const h=parseFloat(el.style.height)*scale; const fs=parseFloat(el.style.fontSize)*scale;
-    const isTop=parseFloat(el.style.top)<img.clientHeight*0.18;
-    ctx.fillStyle=isTop?'black':'white'; ctx.fillRect(x,y,parseFloat(el.style.width)*scale,h);
-    ctx.fillStyle=isTop?'white':'black'; ctx.font=`${fs}px sans-serif`; ctx.textBaseline='top';
-    ctx.fillText(el.innerText,x,y);
+    const w=parseFloat(el.style.width)*scale; const h=parseFloat(el.style.height)*scale;
+    const isTop=el.dataset.top==='1';
+    if(el.classList.contains('word')){
+      const fs=parseFloat(el.style.fontSize)*scale;
+      ctx.fillStyle=isTop?'black':'white'; ctx.fillRect(x-2,y-2,w+4,h+4);
+      ctx.fillStyle=isTop?'white':'black'; ctx.font=`${fs}px sans-serif`; ctx.textBaseline='top';
+      ctx.fillText(el.innerText,x,y);
+    }else{
+      ctx.fillStyle=isTop?'black':'white'; ctx.fillRect(x,y,w,h);
+    }
   });
   const url=canvas.toDataURL('image/png'); img.src=url; layers.innerHTML='';
   const a=document.createElement('a'); a.download='edited.png'; a.href=url; a.click();
