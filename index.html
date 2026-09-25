@@ -53,8 +53,9 @@ const layers = document.getElementById('layers');
 const eraserBtn = document.getElementById('eraserBtn');
 let isEraserActive = false;
 
+// FIXED: Added [0] back so the file reader doesn't crash silently
 document.getElementById('upload').onchange = e => {
-  if(e.target.files[0]) {
+  if(e.target.files && e.target.files[0]) {
     img.src = URL.createObjectURL(e.target.files[0]);
     layers.innerHTML = '';
   }
