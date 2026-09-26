@@ -6,7 +6,7 @@
 <style>
   #stage{position:relative; display:inline-block}
   #img{max-width:100%; display:block}
- .word{
+.word{
     position:absolute;
     background:transparent;
     border:none;
@@ -16,7 +16,7 @@
     white-space:nowrap;
     cursor:text;
   }
- .word:focus{background:rgba(255,255,230,0.9)}
+.word:focus{background:rgba(255,255,230,0.9)}
 </style>
 </head>
 <body>
@@ -42,13 +42,24 @@ upload.onchange=e=>{
 editBtn.onclick=async()=>{
   const {data}=await Tesseract.recognize(img.src,'eng');
   const scale=img.naturalWidth/img.clientWidth;
+  const H=img.naturalHeight;
 
-  // erase original text so no double text
+  const realWords = data.words.filter(w=>{
+    let t=w.text.trim();
+    if(!t) return false;
+    if(w.confidence < 75) return false;
+    if(t.length===1 &&!/[0-9%₿B]/.test(t)) return false;
+    if(t.toLowerCase()==='x' || t.toLowerCase()==='xx') return false;
+    if(t==='|' || t==='l' || t==='I') return false;
+    if(w.bbox.y0 < H*0.11) return false;
+    return true;
+  });
+
   const c=document.createElement('canvas');
   c.width=img.naturalWidth; c.height=img.naturalHeight;
   const ctx=c.getContext('2d');
   ctx.drawImage(img,0,0);
-  data.words.forEach(w=>{
+  realWords.forEach(w=>{
     const b=w.bbox;
     ctx.fillStyle='white';
     ctx.fillRect(b.x0,b.y0,b.x1-b.x0,b.y1-b.y0);
@@ -56,8 +67,8 @@ editBtn.onclick=async()=>{
   img.src=c.toDataURL();
 
   layers.innerHTML='';
-  data.words.forEach(w=>{
-    let t=w.text.trim(); if(!t)return;
+  realWords.forEach(w=>{
+    let t=w.text.trim();
     const b=w.bbox;
     const d=document.createElement('div');
     d.className='word';
