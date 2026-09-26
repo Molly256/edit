@@ -6,18 +6,7 @@
 <style>
   #stage{position:relative; display:inline-block}
   #img{max-width:100%; display:block}
- .word{
-    position:absolute;
-    background:transparent;
-    border:none;
-    outline:none;
-    padding:0;
-    margin:0;
-    white-space:nowrap;
-    cursor:text;
-    color:transparent; /* hide until edit mode */
-  }
- .word.editing{color:black}
+.word{position:absolute; background:transparent; border:none; outline:none; padding:0; margin:0; white-space:nowrap}
 </style>
 </head>
 <body>
@@ -28,78 +17,90 @@
 
 <script>
 const img=document.getElementById('img'), layers=document.getElementById('layers');
-let origSrc='';
+let detected=[];
 
 upload.onchange=e=>{
-  origSrc=URL.createObjectURL(e.target.files[0]);
-  img.src=origSrc;
-  layers.innerHTML='';
+  img.src=URL.createObjectURL(e.target.files[0]);
+  layers.innerHTML=''; detected=[];
 }
 
 editBtn.onclick=async()=>{
   const {data}=await Tesseract.recognize(img.src,'eng');
-  layers.innerHTML='';
-  const sx=img.clientWidth/img.naturalWidth;
-  const sy=img.clientHeight/img.naturalHeight;
-
-  data.words.forEach(w=>{
-    const t=w.text.trim();
-    if(!t) return;
-    if(w.confidence < 80) return;
-    if(t.length < 2 &&!/[0-9]/.test(t)) return;
-    if(w.bbox.y0 < img.naturalHeight*0.11) return;
-
-    const b=w.bbox;
-    const d=document.createElement('div');
-    d.className='word editing';
-    d.contentEditable=true;
-    d.innerText=t;
-    d.style.left=(b.x0*sx)+'px';
-    d.style.top=(b.y0*sy)+'px';
-    d.style.fontSize=((b.y1-b.y0)*sy)+'px';
-    d.style.fontFamily='sans-serif';
-
-    // tap = cursor
-    d.addEventListener('click',()=>{ d.focus(); });
-    // backspace empty = remove word
-    d.addEventListener('keydown',(e)=>{
-      if(e.key==='Backspace' && d.innerText.trim()===''){
-        d.remove();
-      }
-    });
-
-    layers.appendChild(d);
+  detected=data.words.filter(w=>{
+    const t=w.text.trim(); if(!t)return false;
+    if(w.confidence<80)return false;
+    if(t.length===1 &&!/[0-9%]/.test(t))return false;
+    if(w.bbox.y0 < img.naturalHeight*0.12) return false;
+    return true;
   });
+  alert(detected.length+' texts ready. Now TAP any text on image to edit it');
 }
+
+// TAP on image to edit THAT text only
+layers.addEventListener('click',async e=>{
+  if(!detected.length) return;
+  const rect=layers.getBoundingClientRect();
+  const x=(e.clientX-rect.left)*(img.naturalWidth/img.clientWidth);
+  const y=(e.clientY-rect.top)*(img.naturalHeight/img.clientHeight);
+
+  // find clicked word
+  const w=detected.find(w=> x>=w.bbox.x0 && x<=w.bbox.x1 && y>=w.bbox.y0 && y<=w.bbox.y1 );
+  if(!w) return;
+
+  // erase ONLY this one real text from image now
+  const c=document.createElement('canvas');
+  c.width=img.naturalWidth; c.height=img.naturalHeight;
+  const ctx=c.getContext('2d');
+  ctx.drawImage(img,0,0);
+  const pix=ctx.getImageData(Math.max(0,w.bbox.x0-10),Math.max(0,w.bbox.y0-10),1,1).data;
+  ctx.fillStyle=`rgb(${pix[0]},${pix[1]},${pix[2]})`;
+  ctx.fillRect(w.bbox.x0-2,w.bbox.y0-2,w.bbox.x1-w.bbox.x0+4,w.bbox.y1-w.bbox.y0+4);
+  img.src=c.toDataURL();
+
+  await new Promise(r=>img.onload=r);
+
+  // create editable ONLY for that word
+  const scale=img.clientWidth/img.naturalWidth;
+  const d=document.createElement('div');
+  d.className='word';
+  d.contentEditable=true;
+  d.innerText=w.text.trim();
+  d.style.left=(w.bbox.x0*scale)+'px';
+  d.style.top=(w.bbox.y0*scale)+'px';
+  d.style.fontSize=((w.bbox.y1-w.bbox.y0)*scale)+'px';
+  d.style.color='black';
+  d.style.fontFamily='sans-serif';
+  layers.appendChild(d);
+  setTimeout(()=>d.focus(),100);
+
+  // remove from list so not edited again
+  detected=detected.filter(v=>v!==w);
+
+  d.addEventListener('keydown',ev=>{
+    if(ev.key==='Backspace' && d.innerText.trim()===''){
+      d.remove();
+    }
+  });
+});
 
 saveBtn.onclick=()=>{
   const canvas=document.createElement('canvas');
-  const temp=new Image();
-  temp.src=origSrc;
-  temp.onload=()=>{
-    canvas.width=temp.naturalWidth;
-    canvas.height=temp.naturalHeight;
-    const ctx=canvas.getContext('2d');
-    ctx.drawImage(temp,0,0);
-    const s=temp.naturalWidth/img.clientWidth;
-
-    document.querySelectorAll('.word').forEach(el=>{
-      if(!el.innerText.trim()) return;
-      const x=parseFloat(el.style.left)*s;
-      const y=parseFloat(el.style.top)*s;
-      const fs=parseFloat(el.style.fontSize)*s;
-      // erase old with sampled bg
-      const px=ctx.getImageData(Math.max(0,x-2),Math.max(0,y-2),1,1).data;
-      ctx.fillStyle=`rgb(${px[0]},${px[1]},${px[2]})`;
-      ctx.fillRect(x-2,y-2,el.offsetWidth*s+4,el.offsetHeight*s+4);
-      ctx.fillStyle='black';
-      ctx.font=`${fs}px sans-serif`;
-      ctx.textBaseline='top';
-      ctx.fillText(el.innerText,x,y);
-    });
-    img.src=canvas.toDataURL();
-    layers.innerHTML='';
-  }
+  canvas.width=img.naturalWidth; canvas.height=img.naturalHeight;
+  const ctx=canvas.getContext('2d');
+  ctx.drawImage(img,0,0);
+  const s=img.naturalWidth/img.clientWidth;
+  document.querySelectorAll('.word').forEach(el=>{
+    if(!el.innerText.trim()) return;
+    const x=parseFloat(el.style.left)*s;
+    const y=parseFloat(el.style.top)*s;
+    const fs=parseFloat(el.style.fontSize)*s;
+    ctx.fillStyle='black';
+    ctx.font=`${fs}px sans-serif`;
+    ctx.textBaseline='top';
+    ctx.fillText(el.innerText,x,y);
+  });
+  img.src=canvas.toDataURL();
+  layers.innerHTML='';
 }
 </script>
 </body>
