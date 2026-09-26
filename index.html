@@ -6,7 +6,7 @@
 <style>
   #stage{position:relative; display:inline-block}
   #img{max-width:100%; display:block}
-.word{
+ .word{
     position:absolute;
     background:transparent;
     border:none;
@@ -15,92 +15,91 @@
     margin:0;
     white-space:nowrap;
     cursor:text;
+    color:transparent; /* hide until edit mode */
   }
-.word:focus{background:rgba(255,255,230,0.9)}
+ .word.editing{color:black}
 </style>
 </head>
 <body>
-
 <input type="file" id="upload">
-<button id="editBtn">EDIT ALL</button>
+<button id="editBtn">EDIT</button>
 <button id="saveBtn">SAVE</button>
-
-<div id="stage">
-  <img id="img">
-  <div id="layers" style="position:absolute; left:0; top:0; width:100%; height:100%"></div>
-</div>
+<div id="stage"><img id="img"><div id="layers" style="position:absolute;left:0;top:0;width:100%;height:100%"></div></div>
 
 <script>
-const img=document.getElementById('img');
-const layers=document.getElementById('layers');
+const img=document.getElementById('img'), layers=document.getElementById('layers');
+let origSrc='';
 
 upload.onchange=e=>{
-  img.src=URL.createObjectURL(e.target.files[0]);
+  origSrc=URL.createObjectURL(e.target.files[0]);
+  img.src=origSrc;
   layers.innerHTML='';
 }
 
 editBtn.onclick=async()=>{
   const {data}=await Tesseract.recognize(img.src,'eng');
-  const scale=img.naturalWidth/img.clientWidth;
-  const H=img.naturalHeight;
-
-  const realWords = data.words.filter(w=>{
-    let t=w.text.trim();
-    if(!t) return false;
-    if(w.confidence < 75) return false;
-    if(t.length===1 &&!/[0-9%₿B]/.test(t)) return false;
-    if(t.toLowerCase()==='x' || t.toLowerCase()==='xx') return false;
-    if(t==='|' || t==='l' || t==='I') return false;
-    if(w.bbox.y0 < H*0.11) return false;
-    return true;
-  });
-
-  const c=document.createElement('canvas');
-  c.width=img.naturalWidth; c.height=img.naturalHeight;
-  const ctx=c.getContext('2d');
-  ctx.drawImage(img,0,0);
-  realWords.forEach(w=>{
-    const b=w.bbox;
-    ctx.fillStyle='white';
-    ctx.fillRect(b.x0,b.y0,b.x1-b.x0,b.y1-b.y0);
-  });
-  img.src=c.toDataURL();
-
   layers.innerHTML='';
-  realWords.forEach(w=>{
-    let t=w.text.trim();
+  const sx=img.clientWidth/img.naturalWidth;
+  const sy=img.clientHeight/img.naturalHeight;
+
+  data.words.forEach(w=>{
+    const t=w.text.trim();
+    if(!t) return;
+    if(w.confidence < 80) return;
+    if(t.length < 2 &&!/[0-9]/.test(t)) return;
+    if(w.bbox.y0 < img.naturalHeight*0.11) return;
+
     const b=w.bbox;
     const d=document.createElement('div');
-    d.className='word';
+    d.className='word editing';
     d.contentEditable=true;
     d.innerText=t;
-    d.style.left=(b.x0/scale)+'px';
-    d.style.top=(b.y0/scale)+'px';
-    d.style.fontSize=((b.y1-b.y0)/scale)+'px';
+    d.style.left=(b.x0*sx)+'px';
+    d.style.top=(b.y0*sy)+'px';
+    d.style.fontSize=((b.y1-b.y0)*sy)+'px';
     d.style.fontFamily='sans-serif';
-    d.style.color='black';
+
+    // tap = cursor
+    d.addEventListener('click',()=>{ d.focus(); });
+    // backspace empty = remove word
+    d.addEventListener('keydown',(e)=>{
+      if(e.key==='Backspace' && d.innerText.trim()===''){
+        d.remove();
+      }
+    });
+
     layers.appendChild(d);
   });
 }
 
 saveBtn.onclick=()=>{
   const canvas=document.createElement('canvas');
-  canvas.width=img.naturalWidth; canvas.height=img.naturalHeight;
-  const ctx=canvas.getContext('2d');
-  ctx.drawImage(img,0,0);
-  const scale=img.naturalWidth/img.clientWidth;
-  document.querySelectorAll('.word').forEach(el=>{
-    const x=parseFloat(el.style.left)*scale;
-    const y=parseFloat(el.style.top)*scale;
-    const fs=parseFloat(el.style.fontSize)*scale;
-    ctx.fillStyle='black';
-    ctx.font=`${fs}px sans-serif`;
-    ctx.textBaseline='top';
-    ctx.fillText(el.innerText,x,y);
-  });
-  const src=canvas.toDataURL();
-  img.src=src;
-  layers.innerHTML='';
+  const temp=new Image();
+  temp.src=origSrc;
+  temp.onload=()=>{
+    canvas.width=temp.naturalWidth;
+    canvas.height=temp.naturalHeight;
+    const ctx=canvas.getContext('2d');
+    ctx.drawImage(temp,0,0);
+    const s=temp.naturalWidth/img.clientWidth;
+
+    document.querySelectorAll('.word').forEach(el=>{
+      if(!el.innerText.trim()) return;
+      const x=parseFloat(el.style.left)*s;
+      const y=parseFloat(el.style.top)*s;
+      const fs=parseFloat(el.style.fontSize)*s;
+      // erase old with sampled bg
+      const px=ctx.getImageData(Math.max(0,x-2),Math.max(0,y-2),1,1).data;
+      ctx.fillStyle=`rgb(${px[0]},${px[1]},${px[2]})`;
+      ctx.fillRect(x-2,y-2,el.offsetWidth*s+4,el.offsetHeight*s+4);
+      ctx.fillStyle='black';
+      ctx.font=`${fs}px sans-serif`;
+      ctx.textBaseline='top';
+      ctx.fillText(el.innerText,x,y);
+    });
+    img.src=canvas.toDataURL();
+    layers.innerHTML='';
+  }
 }
 </script>
 </body>
